@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.*
+*.local
+# 真實資料一律不進 repo
+data/
+*.csv
+*.xlsx
+*.stdf
+*.std

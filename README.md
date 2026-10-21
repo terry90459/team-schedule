@@ -1,0 +1,111 @@
+# 團隊工程清單與排程
+
+工程清單、機台生產排程、每日視圖、進度紀錄的團隊共用網頁。
+
+- **網頁**：GitHub Pages（這個 repo 自動建置部署）
+- **資料**：Supabase（PostgreSQL＋帳號登入＋權限）
+- **大檔案**（datalog、驗機資料、mail）：**不進資料庫、不進 GitHub**，放在公司內部網路磁碟，資料庫只存路徑
+
+> ⚠ 這是 public repo。**不要 commit 任何真實資料**（客戶名稱、料號、datalog、匯出的 CSV）。真實資料只存在 Supabase。
+
+---
+
+## 第一次架設（約 15 分鐘）
+
+### 1. Supabase：建資料表
+1. 到 [supabase.com](https://supabase.com) 用 GitHub 登入 → **New project**（Region 選 Tokyo 或 Singapore）
+2. 左側 **SQL Editor** → **New query** → 把 [`supabase/schema.sql`](supabase/schema.sql) 整份貼上 → **Run**
+   （可以重複執行，不會刪資料；之後 schema 有更新時再貼一次即可）
+
+### 2. Supabase：關掉 email 確認
+Supabase 內建的寄信服務**只會寄給專案團隊成員、每小時只能寄 2 封**，同事註冊時收不到確認信。
+因為新帳號本來就要管理員核准，所以直接關掉 email 確認：
+
+**Authentication → Sign In / Providers → Email → 關閉「Confirm email」→ Save**
+
+### 3. 取得連線資訊
+右上角 **Connect**（或 **Project Settings → API Keys**），記下：
+- **Project URL**：`https://xxxxxxxx.supabase.co`
+- **Publishable key**：`sb_publishable_...`（舊專案叫 `anon` key）
+
+> Publishable key 本來就是設計給網頁用的公開金鑰，資料安全靠資料庫的權限（RLS）保護。
+> **絕對不要**把 `secret` key 或 `service_role` key 放到這裡。
+
+### 4. GitHub：設定變數並開啟 Pages
+1. 這個 repo → **Settings → Secrets and variables → Actions → Variables** 分頁 → **New repository variable**，新增兩個：
+   - `SUPABASE_URL` = 上面的 Project URL
+   - `SUPABASE_KEY` = 上面的 Publishable key
+2. **Settings → Pages → Build and deployment → Source** 選 **GitHub Actions**
+3. **Actions** 分頁 → 「部署到 GitHub Pages」→ **Run workflow**（之後每次 push 到 main 都會自動部署）
+4. 完成後網址是 `https://<你的帳號>.github.io/<repo 名稱>/`
+
+### 5. 第一次登入
+1. 打開網址 → **註冊新帳號**。**第一個註冊的人自動成為管理員**，所以請你自己先註冊。
+2. （選用）把舊資料匯入：SQL Editor 貼上搬移用的 SQL 執行（這個檔案不放在 repo）。
+3. 把網址給同事註冊 → 你在 **帳號管理** 分頁選權限核准。
+
+---
+
+## 權限
+
+| 權限 | 可以做什麼 |
+|---|---|
+| 待核准／停用 | 只看得到「等待核准」畫面，看不到任何資料 |
+| 只能看 | 瀏覽所有頁面、匯出 CSV |
+| 可編輯 | 新增、修改、刪除工程項目、排程、紀錄、成員、機台 |
+| 管理員 | 可編輯＋帳號管理＋共用設定（日曆天／工作天） |
+
+- 「更新者」由資料庫自動填入登入者的顯示名稱，無法冒用。
+- 至少會保留一位管理員，無法把最後一位管理員降級。
+- 忘記密碼：Supabase 內建寄信寄不到同事信箱，請管理員到 **Authentication → Users** 刪除該帳號，讓同事重新註冊後再核准。
+
+## 檔案（datalog、驗機資料等）
+
+附件欄只存**連結或網路磁碟路徑**（例如 `\\server\share\資料夾\檔名`），檔案本體放公司內部網路磁碟。
+瀏覽器無法直接開啟網路磁碟路徑，點一下會複製路徑，再貼到檔案總管開啟（需要公司內網與該資料夾的權限）。
+
+## 免費方案的限制
+
+- 資料庫 500 MB（純文字資料，幾年內用不完）
+- **一週沒有任何人使用，專案會被暫停**，到 Supabase 後台按 Restore 即可恢復，資料不會不見
+- 建議定期用頁面上的「匯出 CSV」備份，存到公司網路磁碟
+
+---
+
+## 開發
+
+```bash
+npm install
+node build.mjs                                   # 沒有設定 Supabase → 本機試用版（資料存在瀏覽器）
+SUPABASE_URL=... SUPABASE_KEY=... node build.mjs # 連到 Supabase
+npx serve dist                                   # 或任何靜態伺服器，開 http://localhost:3000
+```
+
+### 結構
+```
+src/main.jsx            前端（React，單一檔案）
+build.mjs               esbuild 打包 → dist/index.html + dist/app.js
+supabase/schema.sql     資料表、權限（RLS）、觸發器、即時同步
+.github/workflows/      GitHub Pages 自動部署
+```
+
+### 資料層
+畫面只透過 `useStore()` 存取資料；`useStore` 底下是可替換的後端：
+`supabaseBackend()`（線上）與 `localBackend()`（本機試用），介面相同：
+
+```
+subscribe(res, cb, onErr) → unsubscribe     // cb(list) 收到該資源完整清單
+create(res, id, body) / update(res, id, patch) / remove(res, id)
+```
+
+| 前端資源 | 資料表 | 說明 |
+|---|---|---|
+| rows | `eng_items` | 工程項目 |
+| logs | `eng_logs` | 進度紀錄（`row_id` → `eng_items.id`，刪除項目時一併刪除） |
+| files | `eng_files` | 連結／網路磁碟路徑（`row_id` → `eng_items.id`） |
+| plans | `prod_plans` | 機台生產排程 |
+| members / machines | `members` / `machines` | 團隊成員、機台清單 |
+| settings | `settings` | 共用設定（一筆 `id = app`） |
+| — | `profiles` | 帳號名稱與權限（對應 Supabase `auth.users`） |
+
+即時同步使用 Supabase Realtime；若網路擋住 WebSocket，會自動改成每 20 秒重新讀取（右上角會顯示）。
