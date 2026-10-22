@@ -74,11 +74,8 @@ drop trigger if exists guard_profile on public.profiles;
 create trigger guard_profile before update on public.profiles
   for each row execute function public.guard_profile();
 
--- 自己改顯示名稱
-create or replace function public.set_my_name(new_name text) returns void
-language sql security definer set search_path = public as $$
-  update public.profiles set name = left(trim(new_name), 64) where id = auth.uid() and trim(new_name) <> '';
-$$;
+-- 顯示名稱只由管理員修改（見第 5 節 rename_member），移除舊版的自行改名
+drop function if exists public.set_my_name(text);
 
 alter table public.profiles enable row level security;
 drop policy if exists "read own or admin" on public.profiles;
@@ -165,6 +162,7 @@ create or replace function public.stamp_updated_by() returns trigger
 language plpgsql security definer set search_path = public as $$
 declare n text;
 begin
+  if current_setting('app.skip_stamp', true) = 'on' then return new; end if;  -- 改名連動時不覆寫
   select name into n from public.profiles where id = auth.uid();
   if n is not null then new.updated_by := n; end if;
   return new;
@@ -204,8 +202,124 @@ drop function if exists public.can_write();  -- 舊版函式，已改成 can_eng
 
 revoke all on public.profiles from anon;
 grant select, update, delete on public.profiles to authenticated;
-revoke execute on function public.set_my_name(text) from public, anon;
-grant execute on function public.set_my_name(text) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 5. 成員清單與帳號連動
+--    · 帳號被核准為 工程師／Planner／管理員 → 自動加入成員清單（同名的舊成員會直接連上）
+--    · 成員分兩組：engineer（工程清單 Owner 下拉）、planner
+--    · 改名（rename_member／改帳號名稱）會一併更新 Owner、紀錄人、更新者
+-- ---------------------------------------------------------------------
+alter table public.members add column if not exists team text not null default 'engineer';
+alter table public.members add column if not exists profile_id uuid references public.profiles(id) on delete set null;
+alter table public.members drop constraint if exists members_team_check;
+alter table public.members add constraint members_team_check check (team in ('engineer', 'planner'));
+create unique index if not exists members_profile_uidx on public.members (profile_id) where profile_id is not null;
+create unique index if not exists members_name_uidx on public.members (lower(name));
+
+-- 把所有資料裡的舊名字換成新名字（不覆寫「更新時間／更新者」的戳記）
+create or replace function public._rename_everywhere(old_name text, new_name text) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if old_name is null or new_name is null or old_name = new_name or old_name = '' then return; end if;
+  perform set_config('app.skip_stamp', 'on', true);
+  update public.eng_items  set owner = new_name      where owner = old_name;
+  update public.eng_items  set updated_by = new_name where updated_by = old_name;
+  update public.prod_plans set updated_by = new_name where updated_by = old_name;
+  update public.eng_logs   set author = new_name     where author = old_name;
+  perform set_config('app.skip_stamp', 'off', true);
+end $$;
+revoke execute on function public._rename_everywhere(text, text) from public, anon, authenticated;
+
+-- 帳號 → 成員清單
+create or replace function public.sync_member() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare m public.members%rowtype; tm text;
+begin
+  if tg_op = 'UPDATE' and new.name is distinct from old.name then
+    if exists (select 1 from public.members where lower(name) = lower(new.name) and profile_id is distinct from new.id
+               and (profile_id is not null or exists (select 1 from public.members x where x.profile_id = new.id))) then
+      raise exception '成員名稱「%」已經有人使用', new.name;
+    end if;
+    perform public._rename_everywhere(old.name, new.name);
+    update public.members set name = new.name where profile_id = new.id;
+  end if;
+  if new.role not in ('engineer', 'planner', 'admin') then return new; end if;
+  tm := case new.role when 'planner' then 'planner' when 'engineer' then 'engineer' else null end;
+  select * into m from public.members where profile_id = new.id;
+  if found then
+    if tm is not null and m.team <> tm then update public.members set team = tm where id = m.id; end if;
+    return new;
+  end if;
+  select * into m from public.members where lower(name) = lower(new.name) limit 1;
+  if found then
+    if m.profile_id is not null then raise exception '成員名稱「%」已經連到其他帳號，請先改名', new.name; end if;
+    update public.members set profile_id = new.id, team = coalesce(tm, m.team) where id = m.id;
+  else
+    insert into public.members (id, name, sort, team, profile_id)
+    values ('m' || substr(md5(new.id::text), 1, 12), new.name,
+            coalesce((select max(sort) + 1 from public.members), 0), coalesce(tm, 'engineer'), new.id);
+  end if;
+  return new;
+end $$;
+drop trigger if exists sync_member on public.profiles;
+create trigger sync_member after insert or update on public.profiles
+  for each row execute function public.sync_member();
+
+-- 管理員改成員名稱（有連帳號的，帳號名稱一起改）
+create or replace function public.rename_member(member_id text, new_name text) returns void
+language plpgsql security definer set search_path = public as $$
+declare m public.members%rowtype; n text := left(trim(new_name), 64);
+begin
+  if not public.is_admin() then raise exception '只有管理員可以改成員名稱'; end if;
+  if n = '' then raise exception '名稱不能空白'; end if;
+  select * into m from public.members where id = member_id;
+  if not found then raise exception '找不到這位成員'; end if;
+  if m.name = n then return; end if;
+  if exists (select 1 from public.members where lower(name) = lower(n) and id <> member_id) then
+    raise exception '成員名稱「%」已經有人使用', n;
+  end if;
+  if m.profile_id is not null then
+    update public.profiles set name = n where id = m.profile_id;   -- 觸發 sync_member 連動
+  else
+    perform public._rename_everywhere(m.name, n);
+    update public.members set name = n where id = member_id;
+  end if;
+end $$;
+
+-- 管理員把帳號對應到既有成員（例如註冊名稱跟清單裡的寫法不同）
+create or replace function public.link_member(p_profile uuid, member_id text) returns void
+language plpgsql security definer set search_path = public as $$
+declare m public.members%rowtype; old public.members%rowtype; pname text;
+begin
+  if not public.is_admin() then raise exception '只有管理員可以設定'; end if;
+  select * into m from public.members where id = member_id;
+  if not found then raise exception '找不到這位成員'; end if;
+  if m.profile_id is not null and m.profile_id <> p_profile then raise exception '「%」已經連到其他帳號', m.name; end if;
+  select * into old from public.members where profile_id = p_profile;
+  select name into pname from public.profiles where id = p_profile;
+  if found and old.id is not null and old.id <> member_id then
+    update public.members set profile_id = null where id = old.id;
+  end if;
+  update public.members set profile_id = p_profile where id = member_id;
+  if pname is distinct from m.name then
+    perform public._rename_everywhere(pname, m.name);
+    update public.profiles set name = m.name where id = p_profile;
+  end if;
+  -- 原本自動建立、已經沒有資料的成員就刪掉
+  if old.id is not null and old.id <> member_id
+     and not exists (select 1 from public.eng_items where owner = old.name)
+     and not exists (select 1 from public.eng_logs where author = old.name) then
+    delete from public.members where id = old.id;
+  end if;
+end $$;
+
+revoke execute on function public.rename_member(text, text) from public, anon;
+grant execute on function public.rename_member(text, text) to authenticated;
+revoke execute on function public.link_member(uuid, text) from public, anon;
+grant execute on function public.link_member(uuid, text) to authenticated;
+
+-- 既有帳號補建／連上成員（重複執行沒關係）
+update public.profiles set role = role where role in ('engineer', 'planner', 'admin');
 
 -- ---------------------------------------------------------------------
 -- 4. 即時同步（多人同時開頁面，一邊改另一邊馬上看到）

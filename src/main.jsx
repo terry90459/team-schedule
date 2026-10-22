@@ -123,19 +123,21 @@ const SB_RENAME = {
   plans: { group: 'grp', start: 'start_date', end: 'end_date', updatedBy: 'updated_by' },
   logs: { rowId: 'row_id', date: 'log_date', text: 'body' },
   files: { rowId: 'row_id' },
+  members: { profileId: 'profile_id' },
 };
+const SB_READONLY = new Set(['profileId']); // 只能由資料庫設定（帳號連動）
 const SB_COLS = {
   rows: ['item', 'owner', 'custOwner', 'machine', 'status', 'due', 'priority', 'remark', 'days', 'order', 'updated', 'updatedBy'],
   plans: ['machine', 'group', 'product', 'hw', 'start', 'end', 'remark', 'updated', 'updatedBy'],
   logs: ['rowId', 'date', 'author', 'text', 'created', 'updated'],
   files: ['rowId', 'name', 'kind', 'url', 'created'],
-  members: ['name', 'sort'], machines: ['name'], settings: ['workdays'],
+  members: ['name', 'sort', 'team', 'profileId'], machines: ['name'], settings: ['workdays'],
 };
 const SB_NULL = new Set(['due', 'start', 'end', 'days', 'date']); // 空字串存成 NULL
 function toDb(res, obj) {
   const out = {}, ren = SB_RENAME[res] || {};
   for (const k of SB_COLS[res]) {
-    if (!(k in obj)) continue;
+    if (!(k in obj) || SB_READONLY.has(k)) continue;
     let v = obj[k];
     if (SB_NULL.has(k) && (v === '' || v === undefined)) v = null;
     if (k === 'days' && v !== null) { v = Number(v); if (!Number.isFinite(v)) v = null; }
@@ -170,7 +172,7 @@ function supabaseBackend(sb, onLive) {
         map = new Map(all.map((r) => [r.id, fromDb(res, r)]));
         emit();
       };
-      reg[res] = { put: (row) => { map.set(row.id, fromDb(res, row)); emit(); }, drop: (id) => { map.delete(id); emit(); } };
+      reg[res] = { put: (row) => { map.set(row.id, fromDb(res, row)); emit(); }, drop: (id) => { map.delete(id); emit(); }, load };
       load();
       // 即時同步；公司網路若擋 WebSocket，就退回每 20 秒重新讀取
       const ch = sb.channel('rt-' + T)
@@ -205,6 +207,9 @@ function supabaseBackend(sb, onLive) {
       if (error) throw error;
       reg[res] && reg[res].drop(id);
     },
+    // 資料庫端函式（改名、連結帳號）
+    async rpc(fn, args) { const { error } = await sb.rpc(fn, args); if (error) throw error; },
+    refresh: (list) => Promise.all((list || Object.keys(reg)).map((r) => reg[r] && reg[r].load())),
   };
 }
 
@@ -282,7 +287,9 @@ function useStore(sb, profile) {
   const who = () => ({ updated: stamp(), updatedBy: S.me || '' });
 
   const rows = useMemo(() => sortRows(d.rows), [d.rows]);
-  const owners = useMemo(() => uniqNames([...d.members].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || byName(a.name, b.name))), [d.members]);
+  const memberList = useMemo(() => [...d.members].map((m) => ({ ...m, team: m.team || 'engineer' })).sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || byName(a.name, b.name)), [d.members]);
+  const owners = useMemo(() => uniqNames(memberList.filter((m) => m.team !== 'planner')), [memberList]);   // 工程清單 Owner 下拉
+  const planners = useMemo(() => uniqNames(memberList.filter((m) => m.team === 'planner')), [memberList]);
   const machines = useMemo(() => uniqNames(d.machines).sort(byName), [d.machines]);
   const settings = d.settings.find((x) => x.id === 'app') || {};
   // 附件：files 資源＋舊版存在 row.files 的
@@ -298,14 +305,14 @@ function useStore(sb, profile) {
   const offerUndo = (text, snap) => say(text, { label: '復原', run: () => { setNotice(null); restore(snap); } });
 
   const api = {
-    rows, owners, machines, settings, plans: d.plans, logs: d.logs, members: d.members, filesByRow,
+    rows, owners, planners, machines, settings, plans: d.plans, logs: d.logs, members: memberList, filesByRow,
     mode, live, readOnly, notice, me, profile,
     role,
     canEdit: canEngR && mode !== 'connecting',   // 工程清單、進度紀錄、附件
     canPlan: canPlanR && mode !== 'connecting',  // 機台生產排程
     canAdmin: role === 'admin' && mode !== 'connecting', // 成員／機台清單、共用設定
     canUpload: mode === 'local', // 線上版不存檔案本體，附件一律貼網路磁碟路徑或連結
-    setMe(n) { if (sb) return sb.rpc('set_my_name', { new_name: n }); setMeState(n); lsSet('me', n); },
+    setMe(n) { setMeState(n); lsSet('me', n); },
     clearNotice: () => setNotice(null),
     patch(id, p) { return U('rows', id, { ...p, ...who() }); },
     add(extra) {
@@ -322,8 +329,31 @@ function useStore(sb, profile) {
       offerUndo(`已刪除「${(row.item || '未命名').split('\n')[0].slice(0, 30)}」${logs.length ? `（含 ${logs.length} 則紀錄）` : ''}`, [['rows', [row]], ['logs', logs], ['files', files]]);
     },
     // 成員、機台：一人／一台一筆
-    addOwner(name) { const n = name.trim(); if (!n || owners.includes(n)) return; return C('members', 'm' + uid().slice(1), { name: n, sort: d.members.length }); },
-    async delOwnerOnly(name) { for (const m of d.members.filter((x) => x.name === name)) await X('members', m.id); },
+    addOwner(name, team = 'engineer') { const n = name.trim(); if (!n || memberList.some((m) => m.name.toLowerCase() === n.toLowerCase())) return; return C('members', 'm' + uid().slice(1), { name: n, sort: d.members.length, team }); },
+    setMemberTeam(id, team) { return U('members', id, { team }); },
+    // 改名：Owner、紀錄人、更新者一併改；有連帳號的，帳號名稱也一起改
+    async renameMember(id, name) {
+      const m = memberList.find((x) => x.id === id), n = (name || '').trim();
+      if (!m || !n || n === m.name) return true;
+      if (memberList.some((x) => x.id !== id && x.name.toLowerCase() === n.toLowerCase())) { say(`「${n}」已經有人使用`); return false; }
+      try {
+        if (S.be.rpc) { await S.be.rpc('rename_member', { member_id: id, new_name: n }); await S.be.refresh(); }
+        else {
+          for (const r of d.rows) { const p = {}; if (r.owner === m.name) p.owner = n; if (r.updatedBy === m.name) p.updatedBy = n; if (Object.keys(p).length) await U('rows', r.id, p); }
+          for (const l of d.logs) if (l.author === m.name) await U('logs', l.id, { author: n });
+          await U('members', id, { name: n });
+          if (S.me === m.name) { setMeState(n); lsSet('me', n); }
+        }
+        say(`已改名為「${n}」，相關的 Owner、紀錄人、更新者都已更新`);
+        return true;
+      } catch (e) { say('改名失敗：' + ((e && e.message) || '未知原因')); return false; }
+    },
+    async linkMember(profileId, memberId) {
+      try { await S.be.rpc('link_member', { p_profile: profileId, member_id: memberId }); await S.be.refresh(); return true; }
+      catch (e) { say('連結失敗：' + ((e && e.message) || '未知原因')); return false; }
+    },
+    refresh: () => S.be && S.be.refresh && S.be.refresh(),
+    async delOwnerOnly(name) { for (const m of d.members.filter((x) => x.name === name && !x.profileId)) await X('members', m.id); },
     addMachine(name) { const n = name.trim(); if (!n || machines.includes(n)) return; return C('machines', 'k' + uid().slice(1), { name: n }); },
     async delMachine(name) { for (const m of d.machines.filter((x) => x.name === name)) await X('machines', m.id); },
     setSetting(p) { return d.settings.some((x) => x.id === 'app') ? U('settings', 'app', p) : C('settings', 'app', p); },
@@ -1142,6 +1172,76 @@ function ImportModal({ S, onClose }) {
   );
 }
 
+/* ---------- 團隊成員面板：分「工程師」「Planner」兩組；管理員可改名、換組、移除 ---------- */
+const TEAM_LABEL = { engineer: '工程師', planner: 'Planner' };
+function MemberRow({ m, S, roA, onRemove }) {
+  const [edit, setEdit] = useState(false), [v, setV] = useState(m.name);
+  const cnt = S.rows.filter((r) => r.owner === m.name).length;
+  const save = async () => { if (await S.renameMember(m.id, v)) setEdit(false); };
+  return (
+    <div className="member-item" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderRadius: 6, fontSize: 13 }}>
+      <Avatar name={m.name} size={20} />
+      {edit ? (
+        <input autoFocus value={v} onChange={(e) => setV(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') { setEdit(false); setV(m.name); } }}
+          style={{ ...fld, height: 26, flex: 1, fontSize: 12.5 }} />
+      ) : (
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.name}{m.profileId && <span title="已連結登入帳號：名稱和組別跟著帳號" style={{ marginLeft: 5, fontSize: 10.5, color: 'oklch(0.5 0.1 155)' }}>● 帳號</span>}</span>
+      )}
+      {edit ? (
+        <>
+          <button onClick={save} style={{ ...darkBtn, height: 26, padding: '0 8px', fontSize: 12 }}>儲存</button>
+          <button onClick={() => { setEdit(false); setV(m.name); }} style={{ ...lineBtn, height: 26, padding: '0 8px', fontSize: 12 }}>取消</button>
+        </>
+      ) : (
+        <>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: V.faint }}>{cnt} 件</span>
+          {!roA && <button className="mv" onClick={() => { setV(m.name); setEdit(true); }} title="改名（Owner、紀錄人、更新者會一起改）" style={{ ...mvBtn, width: 22, fontSize: 12 }}>✎</button>}
+          {!roA && !m.profileId && <button className="mv" onClick={() => S.setMemberTeam(m.id, m.team === 'planner' ? 'engineer' : 'planner')} title={`改到「${m.team === 'planner' ? '工程師' : 'Planner'}」組`} style={{ ...mvBtn, width: 22, fontSize: 12 }}>⇅</button>}
+          {!roA && <button disabled={!!m.profileId} onClick={() => onRemove(m.name)} title={m.profileId ? '已連結帳號的成員，請到「帳號管理」停用' : '移除'} style={{ border: 'none', background: 'transparent', cursor: m.profileId ? 'not-allowed' : 'pointer', color: V.faint, fontSize: 14, opacity: m.profileId ? 0.35 : 1 }}>×</button>}
+        </>
+      )}
+    </div>
+  );
+}
+function MemberPanel({ S, roA, onRemove, onClose }) {
+  const [name, setName] = useState(''), [team, setTeam] = useState('engineer');
+  const add = () => { const n = name.trim(); if (!n) return; if (S.members.some((m) => m.name.toLowerCase() === n.toLowerCase())) { S.say(`「${n}」已經在清單裡`); return; } S.addOwner(n, team); setName(''); };
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
+      <div style={{ position: 'absolute', top: 38, right: 0, width: 360, background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.15)', zIndex: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ fontSize: 13, fontWeight: 500 }}>團隊成員</div>
+        <div style={{ fontSize: 11.5, color: V.muted2, lineHeight: 1.6 }}>
+          帳號在「帳號管理」核准後會自動加入對應的組別（標示 ● 帳號）。工程清單的 Owner 只列「工程師」組。
+          {roA && <><br />只有管理員可以新增、改名或移除成員。</>}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 320, overflow: 'auto' }}>
+          {['engineer', 'planner'].map((t) => {
+            const list = S.members.filter((m) => (m.team || 'engineer') === t);
+            return (
+              <div key={t}>
+                <div style={{ fontSize: 11, color: V.muted2, padding: '6px 8px 2px', display: 'flex', gap: 6 }}>{TEAM_LABEL[t]}<span style={{ fontFamily: MONO }}>{list.length}</span></div>
+                {list.length === 0 && <div style={{ fontSize: 12, color: V.faint, padding: '4px 8px' }}>（沒有成員）</div>}
+                {list.map((m) => <MemberRow key={m.id} m={m} S={S} roA={roA} onRemove={onRemove} />)}
+              </div>
+            );
+          })}
+        </div>
+        {!roA && (
+          <div style={{ display: 'flex', gap: 6, borderTop: `1px solid ${V.line}`, paddingTop: 10 }}>
+            <input value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} placeholder="手動新增（沒有帳號的人）"
+              style={{ ...fld, flex: 1, fontSize: 12.5 }} />
+            <select value={team} onChange={(e) => setTeam(e.target.value)} style={{ ...FSEL, height: 32 }}>
+              <option value="engineer">工程師</option><option value="planner">Planner</option>
+            </select>
+            <button onClick={add} style={darkBtn}>新增</button>
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
 function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
   const [sortKey, setSortKey] = useState('order');
   const [sortDir, setSortDir] = useState(1);
@@ -1277,35 +1377,8 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{ position: 'relative' }}>
-            <button className="member-btn" onClick={() => setShowMembers((s) => !s)} style={lineBtn}>團隊成員（{S.owners.length}）</button>
-            {showMembers && (
-              <>
-                <div onClick={() => setShowMembers(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
-                <div style={{ position: 'absolute', top: 38, right: 0, width: 280, background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.15)', zIndex: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500 }}>團隊成員</div>
-                  {S.owners.length === 0 && <div style={{ fontSize: 12, color: V.muted2 }}>尚未新增成員，新增後即可在 Owner 欄位選擇。</div>}
-                  {roA && <div style={{ fontSize: 11.5, color: V.muted2 }}>只有管理員可以新增或移除成員。</div>}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 240, overflow: 'auto' }}>
-                    {S.owners.map((n) => {
-                      const cnt = S.rows.filter((r) => r.owner === n).length;
-                      return (
-                        <div key={n} className="member-item" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, fontSize: 13 }}>
-                          <Avatar name={n} size={20} />
-                          <span style={{ flex: 1 }}>{n}</span>
-                          <span style={{ fontFamily: MONO, fontSize: 11, color: V.faint }}>{cnt} 件</span>
-                          <button disabled={roA} onClick={() => tryRemoveOwner(n)} title="移除" style={{ border: 'none', background: 'transparent', cursor: roA ? 'default' : 'pointer', color: V.faint, fontSize: 14 }}>×</button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    <input value={newOwner} disabled={roA} onChange={(e) => setNewOwner(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addOwner(); }} placeholder="輸入姓名"
-                      style={{ flex: 1, minWidth: 0, height: 32, border: `1px solid ${V.line2}`, borderRadius: 7, padding: '0 10px', fontSize: 13, background: V.surface }} />
-                    <button disabled={roA} onClick={addOwner} style={darkBtn}>新增</button>
-                  </div>
-                </div>
-              </>
-            )}
+            <button className="member-btn" onClick={() => setShowMembers((s) => !s)} style={lineBtn}>團隊成員（{S.members.length}）</button>
+            {showMembers && <MemberPanel S={S} roA={roA} onRemove={tryRemoveOwner} onClose={() => setShowMembers(false)} />}
           </div>
           <div style={{ position: 'relative' }}>
             <button className="member-btn" onClick={() => setShowMachines((s) => !s)} style={lineBtn}>機台清單（{S.machines.length}）</button>
@@ -2215,21 +2288,25 @@ function AccountsPage({ sb, S, profiles, reload }) {
   const setRole = async (p, role) => {
     setErr('');
     const { error } = await sb.from('profiles').update({ role }).eq('id', p.id);
-    if (error) setErr(error.message.includes('至少要保留') ? '至少要保留一位管理員。' : '更新失敗：' + error.message); else reload();
+    if (error) setErr(error.message.includes('至少要保留') ? '至少要保留一位管理員。' : '更新失敗：' + error.message); else { reload(); setTimeout(() => S.refresh(), 300); }
   };
   const setName = async (p, name) => {
     const n = name.trim(); if (!n || n === p.name) return;
+    setErr('');
     const { error } = await sb.from('profiles').update({ name: n }).eq('id', p.id);
-    if (error) setErr('更新失敗：' + error.message); else reload();
+    if (error) setErr('改名失敗：' + error.message); else { reload(); S.refresh(); }
   };
+  const link = async (p, mid) => { setErr(''); if (await S.linkMember(p.id, mid)) reload(); };
   const sorted = [...profiles].sort((a, b) => (a.role === 'pending' ? 0 : 1) - (b.role === 'pending' ? 0 : 1) || (a.created_at || '').localeCompare(b.created_at || ''));
-  const G = 'minmax(0,1.2fr) minmax(0,1.4fr) 150px 140px 160px';
+  const G = 'minmax(0,1.1fr) minmax(0,1.3fr) 130px 130px 220px';
   return (
-    <div style={{ maxWidth: 1000, display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ maxWidth: 1080, display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ fontSize: 13, color: V.muted, lineHeight: 1.7 }}>
         同事在登入頁按「註冊新帳號」後會出現在這裡，選擇權限即可核准。要停用某人，把權限改回「待核准／停用」。<br />
         {Object.entries(ROLE_LABEL).filter(([k]) => k !== 'pending').map(([k, l]) => <span key={k} style={{ marginRight: 14 }}><b>{l}</b>：{ROLE_HINT[k]}</span>)}<br />
-        顯示名稱會用在「更新者」「紀錄人」和「只看我的」，建議跟團隊成員名稱一致。
+        核准為工程師、Planner 或管理員後，會自動加入團隊成員清單（工程師／管理員 → 工程師組，Planner → Planner 組）。
+        如果清單裡已經有這個人（例如之前手動新增、寫法不同），請在「對應團隊成員」選他，舊資料就會歸到這個帳號。<br />
+        在這裡改名稱，Owner、紀錄人、更新者都會一起改。
       </div>
       {err && <div style={{ fontSize: 13, color: OVER }}>{err}</div>}
       <div style={{ ...card, overflow: 'hidden' }}>
@@ -2238,14 +2315,34 @@ function AccountsPage({ sb, S, profiles, reload }) {
         </div>
         {sorted.map((p) => (
           <div key={p.id} style={{ display: 'grid', gridTemplateColumns: G, gap: 10, padding: '8px 16px', alignItems: 'center', borderBottom: `1px solid ${V.line}`, background: p.role === 'pending' ? SOON.bg : undefined }}>
-            <CellText className="cin" value={p.name} onCommit={(v) => setName(p, v)} style={cin({ fontWeight: 500 })} />
+            <CellText className="cin" value={p.name} onCommit={(v) => setName(p, v)} enterBlur={false} style={cin({ fontWeight: 500 })} />
             <span style={{ fontSize: 12, color: V.muted, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.email}{p.id === S.profile.id ? '（你）' : ''}</span>
             <select value={p.role} onChange={(e) => setRole(p, e.target.value)} style={{ ...FSEL, height: 30, ...(p.role === 'pending' ? { borderColor: SOON.bd, color: SOON.fg } : null) }}>
               {Object.entries(ROLE_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
               {!ROLE_LABEL[p.role] && <option value={p.role}>{p.role}</option>}
             </select>
             <span style={{ fontFamily: MONO, fontSize: 11, color: V.muted2 }}>{(p.created_at || '').slice(0, 16).replace('T', ' ')}</span>
-            <span style={{ fontSize: 12, color: S.owners.includes(p.name) ? 'oklch(0.45 0.1 155)' : V.faint }}>{S.owners.includes(p.name) ? '✓ ' + p.name : '（名稱不在團隊成員中）'}</span>
+            {(() => {
+              const m = S.members.find((x) => x.profileId === p.id);
+              const free = S.members.filter((x) => !x.profileId);
+              if (m) return (
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'oklch(0.45 0.1 155)', minWidth: 0 }}>
+                  <span style={{ whiteSpace: 'nowrap' }}>✓ {m.name}<span style={{ color: V.muted2, marginLeft: 6 }}>{TEAM_LABEL[m.team] || ''}組</span></span>
+                  {free.length > 0 && (
+                    <select value="" title="連錯人了？改連到清單裡的另一位成員（原本自動建立、沒有資料的成員會刪掉）" onChange={(e) => e.target.value && link(p, e.target.value)} style={{ ...FSEL, height: 26, fontSize: 11, color: V.muted2, maxWidth: 90 }}>
+                      <option value="">改連到…</option>
+                      {free.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                    </select>
+                  )}
+                </span>
+              );
+              return (
+                <select value="" onChange={(e) => e.target.value && link(p, e.target.value)} style={{ ...FSEL, height: 30, color: V.muted }}>
+                  <option value="">{['engineer', 'planner', 'admin'].includes(p.role) ? '（未連結）連結到既有成員…' : '核准後自動加入；或先連結到…'}</option>
+                  {free.map((x) => <option key={x.id} value={x.id}>{x.name}（{TEAM_LABEL[x.team] || '工程師'}）</option>)}
+                </select>
+              );
+            })()}
           </div>
         ))}
         {sorted.length === 0 && <div style={{ padding: 20, fontSize: 13, color: V.muted2 }}>讀取中…</div>}
@@ -2255,10 +2352,6 @@ function AccountsPage({ sb, S, profiles, reload }) {
 }
 function UserMenu({ sb, S }) {
   const [open, setOpen] = useState(false);
-  const rename = async () => {
-    const n = window.prompt('新的顯示名稱', S.me);
-    if (n && n.trim()) { const { error } = await S.setMe(n.trim()); if (error) S.say('改名失敗：' + error.message); }
-  };
   return (
     <div style={{ position: 'relative' }}>
       <button onClick={() => setOpen((o) => !o)} style={{ ...FSEL, height: 30, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -2269,7 +2362,7 @@ function UserMenu({ sb, S }) {
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 29 }} />
           <div style={{ position: 'absolute', top: 36, right: 0, width: 220, zIndex: 30, background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.15)', padding: 6, display: 'flex', flexDirection: 'column' }}>
             <div style={{ padding: '6px 10px', fontSize: 11.5, color: V.muted2 }}>{S.profile.email}</div>
-            <button className="member-item" onClick={() => { setOpen(false); rename(); }} style={menuItem}>修改顯示名稱</button>
+            <div style={{ padding: '2px 10px 6px', fontSize: 11, color: V.faint }}>顯示名稱由管理員在「帳號管理」修改</div>
             <button className="member-item" onClick={() => sb.auth.signOut()} style={menuItem}>登出</button>
           </div>
         </>
