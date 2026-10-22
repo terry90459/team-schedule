@@ -145,14 +145,29 @@ npx serve dist                                   # 或任何靜態伺服器，�
 
 ### 結構
 ```
-src/main.jsx            前端（React，單一檔案）
-build.mjs               esbuild 打包 → dist/index.html + dist/app.js
+src/
+  main.jsx              進入點
+  lib/                  config（Supabase 連線）、theme（顏色、狀態常數）、util（日期、國定假日、小工具）
+  data/                 backend（Supabase／本機兩種後端）、store（useStore 資料層）、derive（儀表板用的衍生資料）
+  ui/                   common（共用按鈕、輸入框、欄寬）、tabs（客戶分頁）
+  worklist/             工程清單：頁面、每一列、進度紀錄、匯出／匯入、成員面板
+  dashboard/            總覽、工程排程甘特圖、卡片看板
+  plan/                 生產排程：頁面、每一列、時程圖（含複合排程）
+  daily/                每日
+  account/              登入／註冊、帳號管理（可見分頁、允許名單、備份）
+  app/                  App 外框、右上角設定、線上人數、資料庫版本提醒
+  demo/                 預覽版：模擬的 Supabase＋假資料（只用在 DEMO=1 建置）
+build.mjs               esbuild 打包 → dist/；DEMO=1 → dist-demo/（預覽版）
 supabase/schema.sql     資料表、權限（RLS）、觸發器、即時同步
 .github/workflows/      GitHub Pages 自動部署
 ```
+改功能時先找對應資料夾；共用的樣式與小工具在 `ui/common.jsx`、`lib/util.js`。
+
+### 預覽版
+`DEMO=1 node build.mjs` 會在 `dist-demo/` 建出不連任何資料庫的預覽版：用真正的網頁程式，搭配 `src/demo/` 的假資料與模擬 Supabase（含權限、帳號、分頁），左下角可切換身分。改版前可以先發布預覽版確認，再 push 上線。
 
 ### 資料層
-畫面只透過 `useStore()` 存取資料；`useStore` 底下是可替換的後端：
+畫面只透過 `useStore()`（`src/data/store.js`）存取資料；`useStore` 底下是可替換的後端：
 `supabaseBackend()`（線上）與 `localBackend()`（本機試用），介面相同：
 
 ```

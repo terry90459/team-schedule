@@ -9,3 +9,4 @@ data/
 *.xlsx
 *.stdf
 *.std
+dist-demo/

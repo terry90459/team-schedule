@@ -1,15 +1,18 @@
-// 建置：把 src/main.jsx 打包成 dist/app.js，並產生 dist/index.html
+// 建置：把 src/main.jsx（及 src/ 底下各模組）打包成 dist/app.js，並產生 dist/index.html
 // 用法：SUPABASE_URL=... SUPABASE_KEY=... node build.mjs
+//       DEMO=1 node build.mjs → dist-demo/：預覽版（模擬資料庫＋假資料，不連任何 Supabase）
 import { build } from 'esbuild';
 import { mkdirSync, writeFileSync } from 'node:fs';
 
-const url = process.env.SUPABASE_URL || '';
-const key = process.env.SUPABASE_KEY || '';
-if (!url || !key) console.warn('⚠ 沒有設定 SUPABASE_URL / SUPABASE_KEY，建出來的是「本機試用」版（資料只存在瀏覽器）');
+const demo = !!process.env.DEMO;
+const OUT = demo ? 'dist-demo' : 'dist';
+const url = demo ? '' : process.env.SUPABASE_URL || '';
+const key = demo ? '' : process.env.SUPABASE_KEY || '';
+if (!demo && (!url || !key)) console.warn('⚠ 沒有設定 SUPABASE_URL / SUPABASE_KEY，建出來的是「本機試用」版（資料只存在瀏覽器）');
 
-mkdirSync('dist', { recursive: true });
+mkdirSync(OUT, { recursive: true });
 const r = await build({
-  entryPoints: ['src/main.jsx'],
+  entryPoints: [demo ? 'src/demo/main.jsx' : 'src/main.jsx'],
   bundle: true,
   minify: true,
   format: 'esm',
@@ -22,7 +25,7 @@ const r = await build({
     __SUPABASE_KEY__: JSON.stringify(key),
     'process.env.NODE_ENV': '"production"',
   },
-  outfile: 'dist/app.js',
+  outfile: `${OUT}/app.js`,
   metafile: true,
 });
 const v = Date.now().toString(36);
@@ -76,13 +79,25 @@ select:disabled,input:disabled,textarea:disabled{opacity:1;-webkit-text-fill-col
 input[type=date]{color-scheme:inherit}
 `;
 
-writeFileSync('dist/index.html', `<!DOCTYPE html>
+// 預覽版發布成 claude.ai 頁面：外框（doctype／head／body）由平台加上，這裡只寫內容
+const FONTS = `<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">`;
+const THEME_JS = `<script>try{var t=localStorage.getItem('theme')||'light';if(t!=='auto')document.documentElement.setAttribute('data-theme',t)}catch(e){document.documentElement.setAttribute('data-theme','light')}</script>`;
+if (demo) writeFileSync(`${OUT}/index.html`, `<title>工程清單預覽版</title>
+${THEME_JS}
+${FONTS}
+<style>${CSS}</style>
+<div id="root"></div>
+<script type="module" src="app.js"></script>
+`);
+else writeFileSync(`${OUT}/index.html`, `<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
-<title>團隊工程清單與排程</title>
+<title>${demo ? '工程清單預覽版' : '團隊工程清單與排程'}</title>
 <script>try{var t=localStorage.getItem('theme')||'light';if(t!=='auto')document.documentElement.setAttribute('data-theme',t)}catch(e){document.documentElement.setAttribute('data-theme','light')}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -91,11 +106,11 @@ writeFileSync('dist/index.html', `<!DOCTYPE html>
 </head>
 <body>
 <div id="root"></div>
-<script type="module" src="app.js?v=${v}"></script>
+<script type="module" src="app.js${demo ? '' : '?v=' + v}"></script>
 </body>
 </html>
 `);
-writeFileSync('dist/.nojekyll', '');
-writeFileSync('dist/robots.txt', 'User-agent: *\nDisallow: /\n');
+writeFileSync(`${OUT}/.nojekyll`, '');
+writeFileSync(`${OUT}/robots.txt`, 'User-agent: *\nDisallow: /\n');
 const kb = (Object.values(r.metafile.outputs)[0].bytes / 1024).toFixed(0);
-console.log(`✓ dist/index.html、dist/app.js（${kb} KB）${url ? '— 已連到 Supabase' : '— 本機試用版'}`);
+console.log(`✓ ${OUT}/index.html、${OUT}/app.js（${kb} KB）${demo ? '— 預覽版（假資料）' : url ? '— 已連到 Supabase' : '— 本機試用版'}`);
