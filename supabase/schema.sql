@@ -59,6 +59,52 @@ language sql stable security definer set search_path = public as $$
   select coalesce((select is_owner and status = 'active' from public.profiles where id = auth.uid()), false);
 $$;
 
+-- 允許註冊名單：「@網域」或「完整 email」，由最高管理員在帳號管理頁維護
+--   名單是空的 → 不限制（仍需管理員核准）；只影響之後的新註冊，現有帳號不受影響
+--   （public repo：公司網域不寫在這裡，執行後請到帳號管理頁加入）
+create table if not exists public.signup_allow (
+  pattern     text primary key,
+  note        text not null default '',
+  created_at  timestamptz not null default now(),
+  created_by  text not null default '',
+  constraint signup_allow_format check (pattern = lower(btrim(pattern)) and pattern ~ '^[^@\s]*@[a-z0-9-]+(\.[a-z0-9-]+)+$')
+);
+alter table public.signup_allow enable row level security;
+drop policy if exists "admin read" on public.signup_allow;
+create policy "admin read" on public.signup_allow for select to authenticated using (public.is_admin());
+drop policy if exists "owner insert" on public.signup_allow;
+create policy "owner insert" on public.signup_allow for insert to authenticated with check (public.is_owner());
+drop policy if exists "owner update" on public.signup_allow;
+create policy "owner update" on public.signup_allow for update to authenticated using (public.is_owner()) with check (public.is_owner());
+drop policy if exists "owner delete" on public.signup_allow;
+create policy "owner delete" on public.signup_allow for delete to authenticated using (public.is_owner());
+revoke all on public.signup_allow from anon;
+grant select, insert, update, delete on public.signup_allow to authenticated;
+
+-- 新增時由資料庫填「誰加的」
+create or replace function public.stamp_signup_allow() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if current_setting('app.skip_stamp', true) = 'on' then return new; end if;   -- 還原備份時保留原值
+  new.created_by := coalesce((select name from public.profiles where id = auth.uid()), new.created_by, '');
+  new.created_at := now();
+  return new;
+end $$;
+drop trigger if exists stamp_signup_allow on public.signup_allow;
+create trigger stamp_signup_allow before insert on public.signup_allow
+  for each row execute function public.stamp_signup_allow();
+
+-- 這個信箱能不能註冊（登入頁註冊前先問，只回答是／否，不會透露名單內容）
+create or replace function public.email_allowed(e text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select not exists (select 1 from public.signup_allow)
+      or exists (select 1 from public.signup_allow
+                  where pattern = lower(btrim(e))
+                     or pattern = '@' || split_part(lower(btrim(e)), '@', 2));
+$$;
+revoke execute on function public.email_allowed(text) from public;
+grant execute on function public.email_allowed(text) to anon, authenticated;
+
 -- 註冊時自動建立 profile
 create or replace function public.handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$
@@ -66,6 +112,10 @@ declare first boolean;
 begin
   perform pg_advisory_xact_lock(4242);  -- 避免兩人同時註冊都變成管理員
   first := not exists (select 1 from public.profiles where role = 'admin' and status = 'active');
+  -- 第一位（將成為最高管理員）不受名單限制；其他人要在允許名單內
+  if not first and not public.email_allowed(new.email) then
+    raise exception '此信箱不在允許註冊名單內' using errcode = 'P0001';
+  end if;
   insert into public.profiles (id, email, name, role, status, is_owner)
   values (
     new.id,
@@ -199,12 +249,23 @@ create table if not exists public.prod_plans (
   updated_by  text not null default ''
 );
 
--- 「更新者」一律由資料庫填登入者的名稱，不能冒用
+-- 台灣時間字串（YYYY-MM-DD HH:MI），跟網頁顯示格式一致
+create or replace function public.tw_now() returns text
+language sql stable as $$ select to_char(now() at time zone 'Asia/Taipei', 'YYYY-MM-DD HH24:MI') $$;
+
+-- 「更新時間／更新者」一律由資料庫填（伺服器時間＋登入者名稱），不受個人電腦時鐘影響、也不能冒用
+--   只拖曳排序（只改 sort_order）不算修改，保留原本的更新時間與更新者
 create or replace function public.stamp_updated_by() returns trigger
 language plpgsql security definer set search_path = public as $$
 declare n text;
 begin
-  if current_setting('app.skip_stamp', true) = 'on' then return new; end if;  -- 改名連動時不覆寫
+  if current_setting('app.skip_stamp', true) = 'on' then return new; end if;  -- 改名連動、還原備份時不覆寫
+  -- 除了排序以外什麼都沒變（拖曳排序）：維持原本的更新時間與更新者
+  if tg_op = 'UPDATE' and (to_jsonb(new) - 'sort_order' - 'updated_by') = (to_jsonb(old) - 'sort_order' - 'updated_by') then
+    new.updated_by := old.updated_by;
+    return new;
+  end if;
+  new.updated := public.tw_now();
   select name into n from public.profiles where id = auth.uid();
   if n is not null then new.updated_by := n; end if;
   return new;
@@ -215,6 +276,27 @@ create trigger stamp_updated_by before insert or update on public.eng_items
 drop trigger if exists stamp_updated_by on public.prod_plans;
 create trigger stamp_updated_by before insert or update on public.prod_plans
   for each row execute function public.stamp_updated_by();
+
+-- 進度紀錄、附件的建立／修改時間也由資料庫填
+create or replace function public.stamp_time() returns trigger
+language plpgsql set search_path = public as $$
+begin
+  if current_setting('app.skip_stamp', true) = 'on' then return new; end if;
+  if tg_op = 'INSERT' then
+    new.created := public.tw_now();
+    if tg_table_name = 'eng_logs' then new.updated := new.created; end if;
+  elsif tg_table_name = 'eng_logs' then
+    if (to_jsonb(new) - 'updated') is distinct from (to_jsonb(old) - 'updated') then new.updated := public.tw_now();
+    else new.updated := old.updated; end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists stamp_time on public.eng_logs;
+create trigger stamp_time before insert or update on public.eng_logs
+  for each row execute function public.stamp_time();
+drop trigger if exists stamp_time on public.eng_files;
+create trigger stamp_time before insert on public.eng_files
+  for each row execute function public.stamp_time();
 
 -- ---------------------------------------------------------------------
 -- 3. 權限（RLS）：核准後才看得到；
@@ -411,3 +493,68 @@ language sql security definer set search_path = public as $$
 $$;
 revoke execute on function public.keepalive() from public;
 grant execute on function public.keepalive() to anon, authenticated;
+
+-- ---------------------------------------------------------------------
+-- 7. 備份還原（只限最高管理員）
+--    匯出由網頁直接讀各資料表；還原在這個函式裡一次完成，中途出錯就全部不變
+--    登入帳號（profiles）不會被還原：只還原工作資料、成員、機台、設定與允許註冊名單
+-- ---------------------------------------------------------------------
+create or replace function public.restore_backup(data jsonb) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare t jsonb := data -> 'tables'; out jsonb := '{}'::jsonb; n int;
+begin
+  if not public.is_owner() then raise exception '只有最高管理員可以還原備份'; end if;
+  if data ->> 'app' is distinct from 'team-schedule' or jsonb_typeof(t) is distinct from 'object' then
+    raise exception '這不是本系統的備份檔';
+  end if;
+  if coalesce((data ->> 'schema')::int, 0) > public.schema_version() then
+    raise exception '備份檔來自較新的版本，請先更新資料庫（執行最新的 schema.sql）';
+  end if;
+  perform set_config('app.skip_stamp', 'on', true);   -- 保留備份裡原本的更新時間／更新者
+
+  delete from public.eng_files; delete from public.eng_logs; delete from public.eng_items;
+  delete from public.prod_plans; delete from public.machines; delete from public.settings;
+  delete from public.members;
+
+  insert into public.eng_items  select * from jsonb_populate_recordset(null::public.eng_items,  coalesce(t -> 'eng_items',  '[]'));
+  get diagnostics n = row_count; out := out || jsonb_build_object('eng_items', n);
+  insert into public.eng_logs   select * from jsonb_populate_recordset(null::public.eng_logs,   coalesce(t -> 'eng_logs',   '[]'))
+    where row_id in (select id from public.eng_items);
+  get diagnostics n = row_count; out := out || jsonb_build_object('eng_logs', n);
+  insert into public.eng_files  select * from jsonb_populate_recordset(null::public.eng_files,  coalesce(t -> 'eng_files',  '[]'))
+    where row_id in (select id from public.eng_items);
+  get diagnostics n = row_count; out := out || jsonb_build_object('eng_files', n);
+  insert into public.prod_plans select * from jsonb_populate_recordset(null::public.prod_plans, coalesce(t -> 'prod_plans', '[]'));
+  get diagnostics n = row_count; out := out || jsonb_build_object('prod_plans', n);
+  insert into public.machines   select * from jsonb_populate_recordset(null::public.machines,   coalesce(t -> 'machines',   '[]'));
+  get diagnostics n = row_count; out := out || jsonb_build_object('machines', n);
+  insert into public.settings   select * from jsonb_populate_recordset(null::public.settings,   coalesce(t -> 'settings',   '[]'));
+  get diagnostics n = row_count; out := out || jsonb_build_object('settings', n);
+  -- 成員：對應的帳號已不存在就取消連結
+  insert into public.members
+    select m.id, m.name, m.sort, m.team, case when exists (select 1 from public.profiles p where p.id = m.profile_id) then m.profile_id end
+      from jsonb_populate_recordset(null::public.members, coalesce(t -> 'members', '[]')) m;
+  get diagnostics n = row_count; out := out || jsonb_build_object('members', n);
+  if t ? 'signup_allow' then
+    delete from public.signup_allow;
+    insert into public.signup_allow select * from jsonb_populate_recordset(null::public.signup_allow, t -> 'signup_allow');
+    get diagnostics n = row_count; out := out || jsonb_build_object('signup_allow', n);
+  end if;
+
+  perform set_config('app.skip_stamp', 'off', true);
+  -- 目前使用中的帳號：備份裡沒有他的成員資料時，重新加入成員清單
+  update public.profiles set role = role where status = 'active' and role in ('engineer', 'planner', 'admin');
+  return out;
+end $$;
+revoke execute on function public.restore_backup(jsonb) from public, anon;
+grant execute on function public.restore_backup(jsonb) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 8. 資料庫版本：網頁會比對，過舊時提醒管理員重新執行這份檔案
+--    每次修改本檔請把數字加 1，並同步修改 src/main.jsx 的 SCHEMA_VERSION
+--    （放在檔案最後：前面全部執行成功才會更新版本號）
+-- ---------------------------------------------------------------------
+create or replace function public.schema_version() returns int
+language sql immutable as $$ select 2 $$;
+revoke execute on function public.schema_version() from public;
+grant execute on function public.schema_version() to anon, authenticated;

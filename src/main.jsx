@@ -116,7 +116,10 @@ const SEED = [
 const RES = ['rows', 'plans', 'logs', 'files', 'members', 'machines', 'settings'];
 
 // ---------- Supabase ----------
-const SB_TABLE = { rows: 'eng_items', plans: 'prod_plans', logs: 'eng_logs', files: 'eng_files', members: 'members', machines: 'machines', settings: 'settings' };
+// 這版網頁需要的資料庫版本（= supabase/schema.sql 最後的 schema_version()）；改 schema 時兩邊一起加 1
+const SCHEMA_VERSION = 2;
+const SCHEMA_URL = 'https://github.com/terry90459/team-schedule/blob/main/supabase/schema.sql';
+const SB_TABLE ={ rows: 'eng_items', plans: 'prod_plans', logs: 'eng_logs', files: 'eng_files', members: 'members', machines: 'machines', settings: 'settings' };
 // 前端欄位 → 資料庫欄位（沒列出的同名）
 const SB_RENAME = {
   rows: { custOwner: 'cust_owner', order: 'sort_order', updatedBy: 'updated_by' },
@@ -2271,6 +2274,8 @@ const authErr = (e) => {
   if (/Email not confirmed/i.test(m)) return '這個帳號還沒完成 email 確認。請管理員到 Supabase 關閉「Confirm email」，或在後台手動確認這個帳號。';
   if (/already registered|already exists/i.test(m)) return '這個 email 已經註冊過了，請直接登入。';
   if (/Password should be at least/i.test(m)) return '密碼至少要 6 個字元。';
+  if (e && e.notAllowed) return '這個信箱不在允許註冊的名單內。請確認信箱有沒有打錯，或聯絡管理員把你的信箱加入名單。';
+  if (/Database error saving new user|不在允許註冊名單/i.test(m)) return '註冊失敗：這個信箱可能不在允許註冊的名單內，請聯絡管理員。';
   if (/rate limit/i.test(m)) return '嘗試太多次，請過幾分鐘再試。';
   if (/fetch|network/i.test(m)) return '連不到伺服器，請檢查網路。';
   return m || '發生錯誤，請再試一次。';
@@ -2297,6 +2302,9 @@ function AuthPage({ sb }) {
         if (error) throw error;
       } else {
         if (!name.trim()) throw { message: '請填顯示名稱' };
+        // 先確認信箱在允許名單內（舊版資料庫沒有這個函式時略過，交給資料庫判斷）
+        const chk = await sb.rpc('email_allowed', { e: email.trim() });
+        if (!chk.error && chk.data === false) throw { notAllowed: true };
         const { data, error } = await sb.auth.signUp({ email: email.trim(), password: pw, options: { data: { name: name.trim() } } });
         if (error) throw error;
         if (!data.session) setMsg({ ok: true, text: '註冊成功。這個 Supabase 專案有開啟 email 確認，請先到信箱點確認連結再登入。' });
@@ -2314,7 +2322,7 @@ function AuthPage({ sb }) {
         )}
         <label style={lbl}>Email<input type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} required style={fld} /></label>
         <label style={lbl}>密碼<input type="password" autoComplete={tab === 'in' ? 'current-password' : 'new-password'} value={pw} onChange={(e) => setPw(e.target.value)} required minLength={6} style={fld} /></label>
-        {tab === 'up' && <div style={{ fontSize: 11.5, color: V.muted2, lineHeight: 1.6 }}>請不要用公司電腦的開機密碼。註冊後要等管理員核准才看得到資料。</div>}
+        {tab === 'up' && <div style={{ fontSize: 11.5, color: V.muted2, lineHeight: 1.6 }}>請用工作用的信箱註冊，不要用公司電腦的開機密碼。註冊後要等管理員核准才看得到資料。</div>}
         {msg && <div style={{ fontSize: 12.5, lineHeight: 1.6, color: msg.ok ? 'oklch(0.45 0.1 155)' : OVER }}>{msg.text}</div>}
         <button type="submit" disabled={busy} className="btn-dark" style={{ ...darkBtn, height: 36, opacity: busy ? 0.6 : 1 }}>{busy ? '處理中…' : tab === 'in' ? '登入' : '註冊'}</button>
       </form>
@@ -2433,7 +2441,200 @@ function AccountRow({ p, S, sb, isMe, canDelete, onErr, reload, G }) {
     </div>
   );
 }
-function AccountsPage({ sb, S, profiles, reload }) {
+/* ---------- A1：允許註冊名單（最高管理員維護，其他管理員只能看）---------- */
+const ALLOW_RE = /^[^@\s]*@[a-z0-9-]+(\.[a-z0-9-]+)+$/;
+const normAllow = (s) => { let x = String(s || '').trim().toLowerCase(); if (x && !x.includes('@')) x = '@' + x; return x; };
+const panelHead = { padding: '10px 16px', borderBottom: `1px solid ${V.line}`, background: V.tint, display: 'flex', alignItems: 'baseline', gap: 10 };
+function AllowListPanel({ sb, S, oldDb }) {
+  const owner = !!S.profile.is_owner;
+  const [list, setList] = useState(null), [v, setV] = useState(''), [note, setNote] = useState('');
+  const [err, setErr] = useState(''), [busy, setBusy] = useState(false), [askLast, setAskLast] = useState(null);
+  const load = () => sb.from('signup_allow').select('*').order('created_at').then(({ data, error }) => setList(error ? { error } : data));
+  useEffect(() => { if (!oldDb) load(); }, [oldDb]);
+  const add = async (e) => {
+    e.preventDefault(); setErr('');
+    const p = normAllow(v);
+    if (!p) return;
+    if (!ALLOW_RE.test(p)) { setErr('格式不對：網域請填「@公司.com」，單一信箱請填完整 email。'); return; }
+    if (Array.isArray(list) && list.some((x) => x.pattern === p)) { setErr(`「${p}」已經在名單內。`); return; }
+    setBusy(true);
+    const { error } = await sb.from('signup_allow').insert({ pattern: p, note: note.trim() });
+    setBusy(false);
+    if (error) setErr('新增失敗：' + (error.code === '42501' ? '只有最高管理員可以修改名單。' : error.message));
+    else { setV(''); setNote(''); load(); }
+  };
+  const del = async (p) => {
+    setErr(''); setAskLast(null);
+    const { error } = await sb.from('signup_allow').delete().eq('pattern', p);
+    if (error) setErr('刪除失敗：' + error.message); else load();
+  };
+  const rows = Array.isArray(list) ? list : [];
+  return (
+    <div style={{ ...card, overflow: 'hidden', alignSelf: 'start' }}>
+      <div style={panelHead}><b style={{ fontSize: 13.5 }}>允許註冊名單</b><span style={{ fontSize: 11.5, color: V.muted2 }}>{owner ? '只有 ★ 最高管理員可以修改' : '只有 ★ 最高管理員可以修改，你只能檢視'}</span></div>
+      <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ fontSize: 12, color: V.muted, lineHeight: 1.7 }}>
+          只有名單內的信箱能註冊新帳號（註冊後仍要核准）。可以填<b>整個網域</b>（<code>@company.com</code>），或只開放給<b>單一信箱</b>（客戶窗口）。已經註冊的帳號不受影響。
+        </div>
+        {oldDb ? <div style={{ fontSize: 12.5, color: SOON.fg }}>資料庫還沒更新，請先執行最新的 schema.sql。</div>
+          : list && list.error ? <div style={{ fontSize: 12.5, color: OVER }}>讀取失敗：{list.error.message}</div>
+          : !list ? <div style={{ fontSize: 12.5, color: V.muted2 }}>讀取中…</div> : (
+          <>
+            {rows.length === 0 && <div style={{ fontSize: 12.5, padding: '8px 10px', borderRadius: 7, background: SOON.bg, color: SOON.fg }}>名單是空的：<b>任何信箱都能註冊</b>（仍需核准）。</div>}
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              {rows.map((x) => (
+                <div key={x.pattern} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.2fr) minmax(0,1fr) auto', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: `1px dashed ${V.line}` }}>
+                  <span style={{ fontFamily: MONO, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {x.pattern}<span style={{ fontFamily: 'inherit', marginLeft: 8, fontSize: 10.5, padding: '1px 6px', borderRadius: 4, background: V.tint, color: V.muted2 }}>{x.pattern.startsWith('@') ? '網域' : '單一信箱'}</span>
+                  </span>
+                  <span style={{ fontSize: 11.5, color: V.muted2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${x.note || ''}${x.created_by ? `\n由 ${x.created_by} 新增` : ''}`}>{x.note}{x.created_by ? `${x.note ? '・' : ''}${x.created_by}` : ''}</span>
+                  {owner && (askLast === x.pattern ? (
+                    <span style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11.5, color: OVER }}>
+                      刪掉後任何信箱都能註冊？
+                      <button onClick={() => setAskLast(null)} style={{ ...lineBtn, height: 26, fontSize: 11.5 }}>取消</button>
+                      <button onClick={() => del(x.pattern)} style={{ ...darkBtn, height: 26, fontSize: 11.5, background: 'oklch(0.55 0.17 25)', color: '#fff' }}>確定</button>
+                    </span>
+                  ) : (
+                    <button className="del" title="從名單移除" onClick={() => (rows.length === 1 ? setAskLast(x.pattern) : del(x.pattern))} style={{ ...FSEL, height: 26, color: V.muted2 }}>移除</button>
+                  ))}
+                </div>
+              ))}
+            </div>
+            {owner && (
+              <form onSubmit={add} style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                <input value={v} onChange={(e) => setV(e.target.value)} placeholder="@customer.com 或 name@customer.com" style={{ ...fld, flex: '1 1 200px', fontFamily: MONO }} />
+                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="備註（例：客戶名稱）" maxLength={60} style={{ ...fld, flex: '1 1 140px' }} />
+                <button type="submit" disabled={busy || !v.trim()} className="btn-dark" style={{ ...darkBtn, opacity: busy || !v.trim() ? 0.5 : 1 }}>加入名單</button>
+              </form>
+            )}
+          </>
+        )}
+        {err && <div style={{ fontSize: 12.5, color: OVER }}>{err}</div>}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- A2：完整備份（管理員匯出、最高管理員還原）---------- */
+const BACKUP_TABLES = [
+  ['eng_items', '工程項目'], ['eng_logs', '進度紀錄'], ['eng_files', '附件連結'], ['prod_plans', '生產排程'],
+  ['members', '團隊成員'], ['machines', '機台'], ['settings', '設定'], ['signup_allow', '允許註冊名單'],
+];
+async function readAll(sb, table, cols = '*') {
+  const all = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await sb.from(table).select(cols).range(from, from + 999);
+    if (error) throw error;
+    all.push(...data);
+    if (data.length < 1000) break;
+  }
+  return all;
+}
+async function makeBackup(sb, S) {
+  const v = await sb.rpc('schema_version');
+  const tables = {};
+  for (const [t] of BACKUP_TABLES) {
+    try { tables[t] = await readAll(sb, t); }
+    catch (e) { if (t === 'signup_allow') continue; throw e; }   // 舊版資料庫沒有允許名單
+  }
+  let accounts = [];
+  try { accounts = await readAll(sb, 'profiles', 'email,name,role,status,is_owner,created_at'); } catch (e) {}
+  return {
+    app: 'team-schedule', schema: v.error ? 1 : v.data, exported_at: stamp(), exported_by: S.me || '',
+    note: '登入帳號（accounts）只供參考，還原時不會建立或修改帳號。本檔含客戶資料，請存放在公司內部、不要上傳到公開位置。',
+    tables, accounts,
+  };
+}
+function downloadJSON(filename, obj) {
+  const blob = new Blob([JSON.stringify(obj, null, 1)], { type: 'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+const fileStamp = () => stamp().replace(/[-:]/g, '').replace(' ', '-');
+function BackupPanel({ sb, S, oldDb }) {
+  const owner = !!S.profile.is_owner;
+  const [busy, setBusy] = useState(''), [msg, setMsg] = useState(null), [file, setFile] = useState(null), [ok, setOk] = useState(false);
+  const inputRef = useRef(null);
+  const exportNow = async (prefix = 'backup') => {
+    const b = await makeBackup(sb, S);
+    downloadJSON(`team-schedule-${prefix}-${fileStamp()}.json`, b);
+    return b;
+  };
+  const doExport = async () => {
+    setBusy('export'); setMsg(null);
+    try { const b = await exportNow(); setMsg({ ok: true, text: `已下載備份（${BACKUP_TABLES.filter(([t]) => b.tables[t]).map(([t, l]) => `${l} ${b.tables[t].length}`).join('、')}）。` }); }
+    catch (e) { setMsg({ ok: false, text: '匯出失敗：' + ((e && e.message) || '未知原因') }); }
+    setBusy('');
+  };
+  const pick = async (e) => {
+    const f = e.target.files && e.target.files[0]; e.target.value = '';
+    setMsg(null); setOk(false); setFile(null);
+    if (!f) return;
+    try {
+      const j = JSON.parse((await f.text()).replace(/^﻿/, ''));
+      if (!j || j.app !== 'team-schedule' || typeof j.tables !== 'object') throw new Error('這不是本系統的備份檔');
+      setFile({ name: f.name, j });
+    } catch (err) { setMsg({ ok: false, text: '無法讀取：' + (err.message || '檔案格式錯誤') }); }
+  };
+  const doRestore = async () => {
+    setBusy('restore'); setMsg(null);
+    try {
+      await exportNow('before-restore');   // 先把目前的資料存一份
+      const { data, error } = await sb.rpc('restore_backup', { data: file.j });
+      if (error) throw error;
+      await S.refresh();
+      setFile(null); setOk(false);
+      setMsg({ ok: true, text: `已還原（${BACKUP_TABLES.filter(([t]) => data && t in data).map(([t, l]) => `${l} ${data[t]}`).join('、')}）。還原前的資料已另外下載成 before-restore 檔。` });
+    } catch (e) { setMsg({ ok: false, text: '還原失敗，資料沒有任何變動：' + ((e && e.message) || '未知原因') }); }
+    setBusy('');
+  };
+  const now = { eng_items: S.rows.length, eng_logs: S.logs.length, prod_plans: S.plans.length, members: S.members.length, machines: S.machines.length };
+  return (
+    <div style={{ ...card, overflow: 'hidden', alignSelf: 'start' }}>
+      <div style={panelHead}><b style={{ fontSize: 13.5 }}>備份與還原</b><span style={{ fontSize: 11.5, color: V.muted2 }}>Supabase 免費方案沒有可下載的自動備份，建議每週匯出一次</span></div>
+      <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ fontSize: 12, color: V.muted, lineHeight: 1.7 }}>
+          匯出所有工程清單、進度紀錄、附件連結、生產排程、成員、機台、設定成一個 JSON 檔。<b>檔案含客戶資料</b>，請存在公司內部的位置。
+        </div>
+        <div><button onClick={doExport} disabled={!!busy} className="btn-dark" style={{ ...darkBtn, opacity: busy ? 0.6 : 1 }}>{busy === 'export' ? '匯出中…' : '⬇ 匯出完整備份'}</button></div>
+        <div style={{ borderTop: `1px dashed ${V.line}`, paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600 }}>從備份還原 {!owner && <span style={{ fontWeight: 400, color: V.muted2, fontSize: 11.5 }}>（只有 ★ 最高管理員可以操作）</span>}</div>
+          <div style={{ fontSize: 12, color: V.muted, lineHeight: 1.7 }}>
+            還原會用備份檔<b>取代目前全部的工作資料</b>；開始前會自動下載一份目前資料的備份。登入帳號不會被還原或刪除，目前使用中的帳號會自動加回成員清單。
+          </div>
+          {owner && !oldDb && (
+            <>
+              <input ref={inputRef} type="file" accept=".json,application/json" onChange={pick} style={{ display: 'none' }} />
+              <div><button onClick={() => inputRef.current && inputRef.current.click()} disabled={!!busy} style={lineBtn}>選擇備份檔…</button></div>
+              {file && (
+                <div style={{ border: `1px solid ${V.line2}`, borderRadius: 8, padding: 10, display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12.5 }}>
+                  <div><b>{file.name}</b><span style={{ color: V.muted2, marginLeft: 8 }}>{file.j.exported_at ? `備份時間 ${file.j.exported_at}` : ''}{file.j.exported_by ? `・${file.j.exported_by}` : ''}</span></div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'auto auto auto', gap: '2px 16px', justifyContent: 'start', fontSize: 12 }}>
+                    <span style={{ color: V.muted2 }}>項目</span><span style={{ color: V.muted2 }}>備份檔</span><span style={{ color: V.muted2 }}>目前</span>
+                    {BACKUP_TABLES.filter(([t]) => t in now || Array.isArray(file.j.tables[t])).map(([t, l]) => (
+                      <React.Fragment key={t}><span>{l}</span><span style={{ fontFamily: MONO }}>{Array.isArray(file.j.tables[t]) ? file.j.tables[t].length : '—'}</span><span style={{ fontFamily: MONO, color: V.muted2 }}>{t in now ? now[t] : '—'}</span></React.Fragment>
+                    ))}
+                  </div>
+                  <label style={{ display: 'flex', gap: 6, alignItems: 'center', color: OVER }}>
+                    <input type="checkbox" checked={ok} onChange={(e) => setOk(e.target.checked)} />我了解目前的資料會被這個備份檔取代
+                  </label>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button onClick={() => { setFile(null); setOk(false); }} disabled={!!busy} style={{ ...lineBtn, height: 30 }}>取消</button>
+                    <button onClick={doRestore} disabled={!ok || !!busy} style={{ ...darkBtn, height: 30, background: 'oklch(0.55 0.17 25)', color: '#fff', opacity: !ok || busy ? 0.5 : 1 }}>{busy === 'restore' ? '還原中…' : '開始還原'}</button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          {owner && oldDb && <div style={{ fontSize: 12.5, color: SOON.fg }}>資料庫還沒更新，請先執行最新的 schema.sql 才能還原。</div>}
+        </div>
+        {msg && <div style={{ fontSize: 12.5, lineHeight: 1.6, color: msg.ok ? 'oklch(0.45 0.1 155)' : OVER }}>{msg.text}</div>}
+      </div>
+    </div>
+  );
+}
+
+function AccountsPage({ sb, S, profiles, reload, oldDb }) {
   const [err, setErr] = useState('');
   const order = { pending: 0, active: 1, disabled: 2 };
   const sorted = [...profiles].sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3) || (b.is_owner ? 1 : 0) - (a.is_owner ? 1 : 0) || (a.created_at || '').localeCompare(b.created_at || ''));
@@ -2442,7 +2643,7 @@ function AccountsPage({ sb, S, profiles, reload }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ fontSize: 13, color: V.muted, lineHeight: 1.75 }}>
-        同事在登入頁「註冊新帳號」後會出現在最上面（待核准），權限預設為<b>只能看</b>；需要的話先改權限，再按<b>核准</b>。要暫停某人使用請按<b>停用</b>，之後按<b>恢復</b>即可回到原本的權限。<br />
+        信箱在下方「允許註冊名單」內的人，可以在登入頁「註冊新帳號」，註冊後會出現在最上面（待核准），權限預設為<b>只能看</b>；需要的話先改權限，再按<b>核准</b>。要暫停某人使用請按<b>停用</b>，之後按<b>恢復</b>即可回到原本的權限。<br />
         {Object.entries(ROLE_LABEL).map(([k, l]) => <span key={k} style={{ marginRight: 14 }}><b>{l}</b>：{ROLE_HINT[k]}</span>)}<br />
         核准為工程師、Planner 或管理員後，會自動加入團隊成員（工程師／管理員 → 工程師組，Planner → Planner 組）；清單裡已有這個人時，請在「對應團隊成員」選他。在這裡改名稱，Owner、紀錄人、更新者都會一起改。<br />
         <b>停用</b>或<b>刪除</b>的帳號會從成員清單移除；他負責的工作會保留，並在工程清單顯示「⚠ 負責人已不在清單」提醒改派（恢復帳號後會自動回到清單）。<b>刪除帳號</b>只有 ★ 最高管理員能操作。
@@ -2458,6 +2659,45 @@ function AccountsPage({ sb, S, profiles, reload }) {
         {sorted.map((p) => <AccountRow key={p.id} p={p} S={S} sb={sb} G={G} isMe={p.id === S.profile.id} canDelete={!!S.profile.is_owner} onErr={setErr} reload={reload} />)}
         {sorted.length === 0 && <div style={{ padding: 20, fontSize: 13, color: V.muted2 }}>讀取中…</div>}
       </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(460px, 1fr))', gap: 12, marginTop: 4 }}>
+        <AllowListPanel sb={sb} S={S} oldDb={oldDb} />
+        <BackupPanel sb={sb} S={S} oldDb={oldDb} />
+      </div>
+    </div>
+  );
+}
+
+/* ---------- A4：資料庫版本檢查 ---------- */
+function useDbVersion(sb) {
+  const [ver, setVer] = useState(null);   // null：還不知道；0：舊版（沒有版本函式）
+  const check = useCallback(() => {
+    if (!sb) return;
+    sb.rpc('schema_version').then(({ data, error }) => {
+      if (!error) setVer(Number(data) || 0);
+      else if (error.code === 'PGRST202' || /schema_version/.test(error.message || '')) setVer(0);
+    });
+  }, [sb]);
+  useEffect(() => { check(); const t = setInterval(check, 10 * 60000); return () => clearInterval(t); }, [check]);
+  return [ver, check];
+}
+function SchemaBanner({ ver, isAdmin, recheck }) {
+  if (ver === null || ver === SCHEMA_VERSION) return null;
+  const newer = ver > SCHEMA_VERSION;
+  if (!newer && !isAdmin) return null;
+  return (
+    <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '8px 24px', fontSize: 13, background: SOON.bg, color: SOON.fg, borderBottom: `1px solid ${SOON.bd}` }}>
+      {newer ? (
+        <><b>網頁版本比資料庫舊</b><span>請按 Ctrl+F5 重新整理頁面，載入最新版本。</span></>
+      ) : (
+        <>
+          <b>資料庫需要更新</b>
+          <span>（資料庫 v{ver || 1}，這版網頁需要 v{SCHEMA_VERSION}）請到 Supabase → SQL Editor → New query，貼上最新的 schema.sql 全文後按 Run。更新前，允許註冊名單、還原備份等新功能無法使用。</span>
+          <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+            <a href={SCHEMA_URL} target="_blank" rel="noreferrer" style={{ ...lineBtn, height: 28, display: 'inline-flex', alignItems: 'center', fontSize: 12, textDecoration: 'none', color: 'inherit' }}>開啟最新 schema.sql</a>
+            <button onClick={recheck} style={{ ...lineBtn, height: 28, fontSize: 12 }}>已執行，重新檢查</button>
+          </span>
+        </>
+      )}
     </div>
   );
 }
@@ -2587,6 +2827,8 @@ function App({ sb = null, profile = null }) {
   const [profiles, setProfilesList] = useProfiles(sb, isAdmin);
   const reloadProfiles = () => sb.from('profiles').select('*').order('created_at').then(({ data }) => data && setProfilesList(data));
   const pendingN = profiles.filter((p) => p.status === 'pending').length;
+  const [dbVer, recheckDb] = useDbVersion(sb);
+  const oldDb = dbVer !== null && dbVer < SCHEMA_VERSION;
   const [view, setView] = useState('overview');
   useEffect(() => { if (view === 'accounts' && isAdmin) reloadProfiles(); }, [view]);
   const [picked, setPicked] = useState({});
@@ -2644,6 +2886,7 @@ function App({ sb = null, profile = null }) {
           </span>
         </div>
       </header>
+      {sb && <SchemaBanner ver={dbVer} isAdmin={isAdmin} recheck={recheckDb} />}
 
       {view === 'list' ? (
         <WorklistPage S={S} D={D} picked={picked} setPicked={setPicked} eview={eview} setEview={setEview} openLogs={setLogRowId} />
@@ -2652,7 +2895,7 @@ function App({ sb = null, profile = null }) {
       ) : view === 'combo' ? (
         <div style={{ flex: 1, overflow: 'auto', padding: 24 }}><ComboPage S={S} D={D} /></div>
       ) : view === 'accounts' && isAdmin ? (
-        <div style={{ flex: 1, overflow: 'auto', padding: 24 }}><AccountsPage sb={sb} S={S} profiles={profiles} reload={reloadProfiles} /></div>
+        <div style={{ flex: 1, overflow: 'auto', padding: 24 }}><AccountsPage sb={sb} S={S} profiles={profiles} reload={reloadProfiles} oldDb={oldDb} /></div>
       ) : view === 'daily' ? (
         <div style={{ flex: 1, overflow: 'auto', padding: 24 }}><DailyPage S={S} D={D} openLogs={setLogRowId} /></div>
       ) : (
