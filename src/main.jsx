@@ -2442,7 +2442,7 @@ function AccountsPage({ sb, S, profiles, reload }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ fontSize: 13, color: V.muted, lineHeight: 1.75 }}>
-        同事在登入頁「註冊新帳號」後會出現在最上面（待核准）。先選好<b>權限</b>，再按<b>核准</b>。要暫停某人使用請按<b>停用</b>，之後按<b>恢復</b>即可回到原本的權限。<br />
+        同事在登入頁「註冊新帳號」後會出現在最上面（待核准），權限預設為<b>只能看</b>；需要的話先改權限，再按<b>核准</b>。要暫停某人使用請按<b>停用</b>，之後按<b>恢復</b>即可回到原本的權限。<br />
         {Object.entries(ROLE_LABEL).map(([k, l]) => <span key={k} style={{ marginRight: 14 }}><b>{l}</b>：{ROLE_HINT[k]}</span>)}<br />
         核准為工程師、Planner 或管理員後，會自動加入團隊成員（工程師／管理員 → 工程師組，Planner → Planner 組）；清單裡已有這個人時，請在「對應團隊成員」選他。在這裡改名稱，Owner、紀錄人、更新者都會一起改。<br />
         <b>停用</b>或<b>刪除</b>的帳號會從成員清單移除；他負責的工作會保留，並在工程清單顯示「⚠ 負責人已不在清單」提醒改派（恢復帳號後會自動回到清單）。<b>刪除帳號</b>只有 ★ 最高管理員能操作。
@@ -2514,6 +2514,73 @@ function RootSB() {
   return <App sb={sb} profile={profile} />;
 }
 
+/* ============================================================
+   線上人數（Supabase Realtime Presence）：誰在線、目前在哪一頁
+   ============================================================ */
+function usePresence(sb, profile, page) {
+  const [list, setList] = useState([]);       // [{ id, name, role, page, at, tabs }]
+  const [ok, setOk] = useState(false);
+  const ch = useRef(null), cur = useRef({});
+  cur.current = { name: profile ? profile.name : '', role: profile ? profile.role : '', owner: !!(profile && profile.is_owner), page };
+  useEffect(() => {
+    if (!sb || !profile) return;
+    const c = sb.channel('online-users', { config: { presence: { key: profile.id } } });
+    ch.current = c;
+    const sync = () => {
+      const st = c.presenceState();
+      const l = Object.entries(st).map(([id, metas]) => {
+        const ms = [...metas].sort((a, b) => (b.at || '').localeCompare(a.at || ''));
+        return { id, ...ms[0], tabs: ms.length, pages: [...new Set(ms.map((m) => m.page))] };
+      });
+      setList(l.sort((a, b) => (b.id === profile.id) - (a.id === profile.id) || byName(a.name || '', b.name || '')));
+    };
+    c.on('presence', { event: 'sync' }, sync)
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') { setOk(true); await c.track({ ...cur.current, at: new Date().toISOString() }); }
+        else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') setOk(false);
+      });
+    return () => { ch.current = null; c.untrack().catch(() => {}); sb.removeChannel(c); };
+  }, [sb, profile && profile.id]);
+  // 換頁或改名時更新自己的狀態
+  useEffect(() => { const c = ch.current; if (c && ok) c.track({ ...cur.current, at: new Date().toISOString() }).catch(() => {}); }, [page, ok, profile && profile.name, profile && profile.role]);
+  return { list, ok };
+}
+const PAGE_LABEL = { overview: '總覽', daily: '每日', combo: '複合排程', list: '工程清單', plan: '生產排程', board: '卡片看板', accounts: '帳號管理' };
+function OnlineBadge({ P, meId }) {
+  const [open, setOpen] = useState(false);
+  const n = P.list.length;
+  const since = (t) => { if (!t) return ''; const m = Math.max(0, Math.round((Date.now() - new Date(t).getTime()) / 60000)); return m < 1 ? '剛剛' : m < 60 ? `${m} 分鐘前` : `${Math.floor(m / 60)} 小時前`; };
+  return (
+    <div style={{ position: 'relative' }}>
+      <button onClick={() => setOpen((o) => !o)} title="點開看誰在線上、目前在哪一頁" style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, fontSize: 11.5, color: P.ok ? 'oklch(0.45 0.1 155)' : V.faint, display: 'flex', alignItems: 'center', gap: 4 }}>
+        👥 {P.ok ? <>線上 <b>{n}</b> 人</> : '線上人數讀取中…'} <span style={{ fontSize: 9 }}>▾</span>
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 29 }} />
+          <div style={{ position: 'absolute', top: 22, right: 0, width: 300, zIndex: 30, background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.15)', padding: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ fontSize: 13, fontWeight: 500, padding: '2px 4px 6px', display: 'flex', alignItems: 'baseline', gap: 6 }}>目前在線<span style={{ fontFamily: MONO, fontSize: 11, color: V.muted2 }}>{n} 人</span></div>
+            {!P.ok && <div style={{ fontSize: 12, color: V.muted2, padding: '4px' }}>即時連線還沒建立（公司網路可能擋住），暫時看不到線上人數。</div>}
+            {P.ok && P.list.map((u) => (
+              <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 6px', borderRadius: 6, background: u.id === meId ? V.tint : undefined }}>
+                <span style={{ position: 'relative', flex: 'none' }}><Avatar name={u.name || '?'} size={24} /><span style={{ position: 'absolute', right: -1, bottom: -1, width: 8, height: 8, borderRadius: 4, background: 'oklch(0.62 0.15 150)', border: `2px solid ${V.surface}` }} /></span>
+                <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', lineHeight: 1.35 }}>
+                  <span style={{ fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name || '（未命名）'}{u.id === meId && <span style={{ fontSize: 10.5, color: V.muted2, marginLeft: 4 }}>（你）</span>}{u.owner ? <span style={{ fontSize: 10.5, color: 'oklch(0.45 0.1 70)', marginLeft: 4 }}>★</span> : null}</span>
+                  <span style={{ fontSize: 11, color: V.muted2 }}>{ROLE_LABEL[u.role] || ''}{u.tabs > 1 ? `・開了 ${u.tabs} 個分頁` : ''}</span>
+                </span>
+                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.35, flex: 'none' }}>
+                  <span style={{ fontSize: 12, color: V.ink2 }}>{(u.pages || [u.page]).map((pg) => PAGE_LABEL[pg] || pg).join('、')}</span>
+                  <span style={{ fontSize: 10.5, color: V.faint }}>{since(u.at)}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function App({ sb = null, profile = null }) {
   const S = useStore(sb, profile);
   const isAdmin = !!profile && profile.role === 'admin';
@@ -2538,6 +2605,7 @@ function App({ sb = null, profile = null }) {
     S.filesByRow.forEach((fs) => fs.forEach((f) => see(f.created, '', '附件')));
     return best;
   }, [S.rows, S.plans, S.logs, S.filesByRow]);
+  const P = usePresence(sb, profile, view);
   const tabs = [['overview', '總覽'], ['daily', '每日'], ['combo', '複合排程'], ['list', '工程清單'], ['plan', '生產排程'], ['board', '卡片看板'], ...(isAdmin ? [['accounts', '帳號管理']] : [])];
   const badge =
     S.mode === 'connecting' ? ['連線中…', V.muted2] :
@@ -2566,7 +2634,10 @@ function App({ sb = null, profile = null }) {
             </select>
           </label>}
           <SettingsMenu S={S} />
-          <span style={{ fontSize: 12, color: badge[1], whiteSpace: 'nowrap' }}>{badge[0]}</span>
+          <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1, lineHeight: 1.3 }}>
+            <span style={{ fontSize: 12, color: badge[1], whiteSpace: 'nowrap' }}>{badge[0]}</span>
+            {sb && <OnlineBadge P={P} meId={profile && profile.id} />}
+          </span>
           <span title={last.t ? `最後一筆修改：${last.what}${last.who ? '・' + last.who : ''}（${last.t}）` : '還沒有任何修改'} style={{ fontSize: 11, color: V.muted2, whiteSpace: 'nowrap', display: 'flex', flexDirection: 'column', lineHeight: 1.25, alignItems: 'flex-end' }}>
             <span>最後更新 <span style={{ fontFamily: MONO }}>{last.t ? last.t.slice(5) : '—'}</span></span>
             {last.t && <span style={{ fontSize: 10.5, color: V.faint }}>{last.what}{last.who ? '・' + last.who : ''}</span>}

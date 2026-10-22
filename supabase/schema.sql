@@ -15,7 +15,7 @@ create table if not exists public.profiles (
   id          uuid primary key references auth.users(id) on delete cascade,
   email       text,
   name        text not null default '',
-  role        text not null default 'engineer',
+  role        text not null default 'viewer',
   created_at  timestamptz not null default now()
 );
 alter table public.profiles add column if not exists status text;
@@ -34,7 +34,9 @@ update public.profiles set is_owner = true
 alter table public.profiles enable trigger user;
 alter table public.profiles alter column status set default 'pending';
 alter table public.profiles alter column status set not null;
-alter table public.profiles alter column role set default 'engineer';
+alter table public.profiles alter column role set default 'viewer';
+-- 新註冊的人預設「只能看」；尚未核准的舊帳號也一併改成只能看（核准前管理員仍可改）
+update public.profiles set role = 'viewer' where status = 'pending' and not is_owner;
 alter table public.profiles add constraint profiles_role_check check (role in ('viewer', 'engineer', 'planner', 'admin'));
 alter table public.profiles add constraint profiles_status_check check (status in ('pending', 'active', 'disabled'));
 create unique index if not exists profiles_one_owner on public.profiles (is_owner) where is_owner;
@@ -69,7 +71,7 @@ begin
     new.id,
     new.email,
     coalesce(nullif(trim(new.raw_user_meta_data ->> 'name'), ''), split_part(new.email, '@', 1)),
-    case when first then 'admin' else 'engineer' end,
+    case when first then 'admin' else 'viewer' end,
     case when first then 'active' else 'pending' end,
     first and not exists (select 1 from public.profiles where is_owner)
   )
