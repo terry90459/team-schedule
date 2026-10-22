@@ -1,17 +1,24 @@
 name: Supabase 保活
 
-# 免費方案一週沒有資料庫活動就會暫停；每天呼叫一次 keepalive()（台灣時間每天 08:17）
+# 兩件事，每天台灣時間 08:17 自動執行：
+# 1. 呼叫 Supabase keepalive()：免費方案一週沒有資料庫活動就會暫停
+# 2. 檢查 repo：public repo 60 天沒有任何 commit，GitHub 會停用排程；
+#    距離上次 commit 超過 50 天時，自動提交一筆時間紀錄（.github/keepalive.txt）
 on:
   schedule:
     - cron: '17 0 * * *'
   workflow_dispatch:
-
-permissions:
-  contents: read
+    inputs:
+      force_commit:
+        description: '不管多久，都提交一次時間紀錄（測試用）'
+        type: boolean
+        default: false
 
 jobs:
-  ping:
+  supabase:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: 呼叫 Supabase keepalive()
         env:
@@ -30,3 +37,26 @@ jobs:
           done
           echo "::error::保活失敗。若 Supabase 專案已被暫停，請到 Supabase 後台按 Resume project；若是剛更新程式，請先把最新的 supabase/schema.sql 貼到 SQL Editor 執行。"
           exit 1
+
+  repo:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: 超過 50 天沒有 commit 就提交時間紀錄
+        env:
+          FORCE: ${{ inputs.force_commit }}
+        run: |
+          last=$(git log -1 --format=%ct)
+          days=$(( ( $(date +%s) - last ) / 86400 ))
+          echo "距離上次 commit：$days 天"
+          if [ "$days" -lt 50 ] && [ "$FORCE" != "true" ]; then
+            echo "還不需要，略過"; exit 0
+          fi
+          TZ=Asia/Taipei date '+%Y-%m-%d %H:%M 保活紀錄（自動產生，請勿手動修改）' > .github/keepalive.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/keepalive.txt
+          git commit -m "保活：自動更新時間紀錄（距上次 commit ${days} 天）"
+          git push
