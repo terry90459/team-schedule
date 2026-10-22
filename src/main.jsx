@@ -1506,7 +1506,7 @@ const card = { background: V.surface, border: `1px solid ${V.line}`, borderRadiu
 
 const PCOLS = 'minmax(0,1fr) 56px 56px 64px 50px 60px';
 // B7：生產排程統計
-function PlanStats({ S, today }) {
+function planParts(S, today) {
   const ts = dstr(today), t7 = dstr(addD(today, 7)), H = 30, hiS = dstr(addD(today, H - 1));
   const vp = S.plans.filter(validPlan);
   const now = vp.filter((p) => p.start <= ts && ts <= p.end);
@@ -1530,29 +1530,36 @@ function PlanStats({ S, today }) {
     { label: '日期重疊', value: clash.size, sub: '同機台排程重疊（未結束）', fg: clash.size ? 'oklch(0.55 0.13 50)' : V.ink },
   ];
   const th = { fontSize: 11, color: V.muted2, background: V.tint, borderTop: `1px solid ${V.line}`, borderBottom: `1px solid ${V.line}` };
-  const G = 'minmax(0,0.8fr) minmax(0,1.6fr) minmax(0,1.4fr) 200px';
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <h2 style={{ margin: '6px 0 0', fontSize: 15 }}>機台生產排程</h2>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,minmax(0,1fr))', gap: 14 }}>
+  const G = 'minmax(0,0.7fr) minmax(0,1.6fr) 150px';
+  return {
+    kpis: (
+      <div style={{ ...card, padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <h2 style={{ margin: 0, fontSize: 15 }}>生產排程</h2>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 10 }}>
         {kpis.map((k) => (
-          <div key={k.label} style={{ ...card, padding: '16px 20px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div key={k.label} style={{ background: V.tint, border: `1px solid ${V.line}`, borderRadius: 8, padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontSize: 13, color: V.muted }}>{k.label}</span>
-            <span style={{ fontFamily: MONO, fontSize: 30, fontWeight: 500, lineHeight: 1.1, color: k.fg || V.ink }}>{k.value}</span>
+            <span style={{ fontFamily: MONO, fontSize: 26, fontWeight: 500, lineHeight: 1.1, color: k.fg || V.ink }}>{k.value}</span>
             <span style={{ fontSize: 12, color: V.muted2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{k.sub}</span>
           </div>
         ))}
       </div>
+      </div>
+    ),
+    table: (
       <div style={{ ...card, overflow: 'hidden' }}>
+        <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'baseline', gap: 8 }}><h2 style={{ margin: 0, fontSize: 15 }}>各機台生產排程</h2><span style={{ fontSize: 12, color: V.muted2 }}>{rows.length} 台</span></div>
         <div style={{ display: 'grid', gridTemplateColumns: G, padding: '8px 20px', gap: 12, ...th }}>
-          <span>機台</span><span>今天</span><span>下一筆</span><span>未來 {H} 天排程天數</span>
+          <span>機台</span><span>今天／下一筆</span><span>未來 {H} 天已排</span>
         </div>
         {rows.length === 0 && <div style={{ padding: '20px', fontSize: 13, color: V.muted2 }}>還沒有機台或生產排程</div>}
         {rows.map((r) => (
           <div key={r.m} style={{ display: 'grid', gridTemplateColumns: G, gap: 12, padding: '9px 20px', fontSize: 13, borderBottom: `1px solid ${V.line}`, alignItems: 'center' }}>
             <span style={{ fontFamily: MONO, display: 'flex', alignItems: 'center', gap: 6 }}>{r.m}{r.hw && <span style={{ fontSize: 10, padding: '0 5px', borderRadius: 3, background: 'oklch(0.62 0.15 50)', color: '#fff', fontFamily: 'inherit' }}>HW</span>}</span>
-            <span style={{ color: r.cur.length ? V.ink : V.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.cur.length ? r.cur.map((p) => [p.group, p.product].filter(Boolean).join(' · ').replace(/\n/g, ' ')).join('；') : '閒置'}</span>
-            <span style={{ color: V.muted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.next ? `${r.next.start.slice(5).replace('-', '/')} ${[r.next.group, r.next.product].filter(Boolean).join(' · ').replace(/\n/g, ' ')}` : '—'}</span>
+            <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0, lineHeight: 1.4 }}>
+              <span style={{ color: r.cur.length ? V.ink : V.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.cur.length ? r.cur.map((p) => [p.group, p.product].filter(Boolean).join(' · ').replace(/\n/g, ' ')).join('；') : '閒置'}</span>
+              {r.next && <span style={{ fontSize: 11.5, color: V.muted2, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>下一筆 {r.next.start.slice(5).replace('-', '/')} {[r.next.group, r.next.product].filter(Boolean).join(' · ').replace(/\n/g, ' ')}</span>}
+            </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ flex: 1, height: 8, background: V.head, borderRadius: 4, overflow: 'hidden' }}><span style={{ display: 'block', height: '100%', width: (r.used / H) * 100 + '%', background: 'oklch(0.7 0.13 150)', borderRadius: 4 }} /></span>
               <span style={{ fontFamily: MONO, fontSize: 12, color: V.muted, width: 48, textAlign: 'right' }}>{r.used} 天</span>
@@ -1560,18 +1567,30 @@ function PlanStats({ S, today }) {
           </div>
         ))}
       </div>
-    </div>
-  );
+    ),
+  };
+}
+// 總覽：全寬排版；寬螢幕三欄、較窄時兩欄
+function useWinW() {
+  const [w, setW] = useState(() => window.innerWidth);
+  useEffect(() => { const f = () => setW(window.innerWidth); window.addEventListener('resize', f); return () => window.removeEventListener('resize', f); }, []);
+  return w;
 }
 function Overview({ D, S, goGantt }) {
+  const w = useWinW();
+  const e = engParts(D, goGantt), pl = planParts(S, D.today);
+  const cols = w >= 1500 ? 3 : 2;
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1280 }}>
-      <OverviewEng D={D} goGantt={goGantt} />
-      <PlanStats S={S} today={D.today} />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {e.kpis}
+      <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols},minmax(0,1fr))`, gap: 14, alignItems: 'stretch' }}>
+        {e.status}{e.prio}{pl.kpis}
+        {e.people}{e.machines}{pl.table}
+      </div>
     </div>
   );
 }
-function OverviewEng({ D, goGantt }) {
+function engParts(D, goGantt) {
   const { rows, names } = D;
   const total = rows.length, done = rows.filter((r) => r.status === '已完成').length, overdue = rows.filter((r) => r.over).length, soonN = rows.filter((r) => r.soon).length;
   const mm = {};
@@ -1589,8 +1608,8 @@ function OverviewEng({ D, goGantt }) {
   const prioBars = PRIO.map((p) => { const l = rows.filter((r) => r.priority === p); return { label: p, count: l.length, open: l.filter((r) => r.status !== '已完成').length, pct: (l.length / maxP) * 100 + '%', bar: PRBAR[p], fg: p === '擱置' ? V.muted2 : p === '最優先' ? 'oklch(0.58 0.16 25)' : V.ink2 }; });
   const people = names.map((n) => { const l = rows.filter((r) => r.owner === n); const o = l.filter((r) => r.over).length; return { name: n, count: l.length, done: l.filter((r) => r.status === '已完成').length, over: o, soon: l.filter((r) => r.soon).length, days: l.reduce((a, r) => a + (Number(r.days) || 0), 0) }; });
   const th = { fontSize: 11, color: V.muted2, background: V.tint, borderTop: `1px solid ${V.line}`, borderBottom: `1px solid ${V.line}` };
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1280 }}>
+  return {
+    kpis: (
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,minmax(0,1fr))', gap: 14 }}>
         {kpis.map((k) => (
           <div key={k.label} style={{ ...card, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1600,7 +1619,8 @@ function OverviewEng({ D, goGantt }) {
           </div>
         ))}
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 14 }}>
+    ),
+    status: (
         <div style={{ ...card, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
           <h2 style={{ margin: 0, fontSize: 15 }}>完成狀況</h2>
           <div style={{ display: 'flex', height: 14, borderRadius: 7, overflow: 'hidden', background: V.head }}>
@@ -1615,6 +1635,8 @@ function OverviewEng({ D, goGantt }) {
             ))}
           </div>
         </div>
+    ),
+    prio: (
         <div style={{ ...card, padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
           <h2 style={{ margin: 0, fontSize: 15 }}>優先度分布</h2>
           {prioBars.map((p) => (
@@ -1625,8 +1647,8 @@ function OverviewEng({ D, goGantt }) {
             </div>
           ))}
         </div>
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: 14, alignItems: 'start' }}>
+    ),
+    people: (
         <div style={{ ...card, overflow: 'hidden' }}>
           <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'baseline', gap: 8 }}><h2 style={{ margin: 0, fontSize: 15 }}>參與人員</h2><span style={{ fontSize: 12, color: V.muted2 }}>{names.filter((n) => n !== UN).length} 人</span></div>
           <div style={{ display: 'grid', gridTemplateColumns: PCOLS, padding: '8px 20px', ...th }}>
@@ -1643,6 +1665,8 @@ function OverviewEng({ D, goGantt }) {
             </div>
           ))}
         </div>
+    ),
+    machines: (
         <div style={{ ...card, overflow: 'hidden' }}>
           <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'baseline', gap: 8 }}><h2 style={{ margin: 0, fontSize: 15 }}>已安排機台</h2><span style={{ fontSize: 12, color: V.muted2 }}>{machines.length} 台</span></div>
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 60px 70px minmax(0,1.2fr)', padding: '8px 20px', ...th }}>
@@ -1658,9 +1682,8 @@ function OverviewEng({ D, goGantt }) {
             </div>
           ))}
         </div>
-      </div>
-    </div>
-  );
+    ),
+  };
 }
 
 function Gantt({ D, picked, setPicked }) {
@@ -1704,7 +1727,8 @@ function Gantt({ D, picked, setPicked }) {
   }).filter((g) => g.rows.length);
   const undated = rows.filter((r) => !r.dueD && (!anyPicked || picked[r.owner])).length;
   const hidden = rows.filter((r) => (!anyPicked || picked[r.owner]) && !inRange(r)).length;
-  const gCols = `240px repeat(${nDays},34px)`;
+  const [boxRef, boxW] = useBoxW();
+  const gCols = `${GANTT_LW}px repeat(${nDays},${fitDW(boxW, nDays)}px)`;
   const legend = STATUS.map((k) => ({ label: k, fg: STC[k] })).concat([{ label: '3 天內到期', fg: SOON.bd }, { label: '逾期', fg: 'oklch(0.58 0.16 25)' }]);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1727,7 +1751,7 @@ function Gantt({ D, picked, setPicked }) {
         </div>
       </div>
       <RangeBar R={R} hidden={hidden} />
-      <div style={{ background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 8, overflow: 'auto', maxHeight: 'calc(100vh - 236px)' }}>
+      <div ref={boxRef} style={{ background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 8, overflow: 'auto', maxHeight: 'calc(100vh - 236px)' }}>
         <div style={{ display: 'grid', gridTemplateColumns: gCols, position: 'sticky', top: 0, zIndex: 3, background: V.head, borderBottom: `1px solid ${V.line3}`, width: 'max-content', minWidth: '100%' }}>
           <div style={{ position: 'sticky', left: 0, zIndex: 4, background: V.head, padding: '8px 14px', fontSize: 12, color: V.muted, borderRight: `1px solid ${V.line3}`, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 4, alignItems: 'flex-start' }}><span>工作項目 / 機台</span>{focusHint(F)}</div>
           {gDays.map((d, i) => (
@@ -1884,7 +1908,22 @@ function PlanRow({ p, S, ro, clash, machineOpts, cols }) {
 /* ============================================================
    每日一格時程圖（生產排程、複合排程共用）
    ============================================================ */
-const DW = 34;
+// 甘特圖：左欄寬度、每天最小寬度；實際每天寬度依畫面撐滿
+const GANTT_LW = 320, MIN_DW = 44;
+function useBoxW() {
+  // callback ref：元素晚出現（例如原本沒資料）也能量到寬度
+  const [el, setEl] = useState(null);
+  const [w, setW] = useState(0);
+  useEffect(() => {
+    if (!el) return;
+    const f = () => setW(el.clientWidth);
+    f();
+    if (!window.ResizeObserver) { window.addEventListener('resize', f); return () => window.removeEventListener('resize', f); }
+    const ro = new ResizeObserver(f); ro.observe(el); return () => ro.disconnect();
+  }, [el]);
+  return [setEl, w];
+}
+const fitDW = (boxW, n) => (boxW ? Math.max(MIN_DW, Math.floor((boxW - GANTT_LW - 2) / n)) : MIN_DW);
 const DIM = { opacity: 0.28, filter: 'grayscale(1)', transition: 'opacity .15s' };
 function useFocus() {
   const [f, setF] = useState(null); // {m, id}
@@ -1907,7 +1946,8 @@ function DailyGrid({ groups: allGroups, headLabel, rangeKey }) {
   const F = useFocus();
   const R = useRange(rangeKey);
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const lo = R.lo, n = R.n, LW = 240, W = n * DW;
+  const [boxRef, boxW] = useBoxW();
+  const lo = R.lo, n = R.n, LW = GANTT_LW, DW = fitDW(boxW, n), W = n * DW;
   // 只留在區間內的橫條；整列都在區間外就先隱藏（日期未定的列照常顯示）
   let hidden = 0;
   const groups = allGroups.map((g) => ({
@@ -1928,7 +1968,7 @@ function DailyGrid({ groups: allGroups, headLabel, rangeKey }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
     <RangeBar R={R} hidden={hidden} />
-    <div style={{ background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 8, overflow: 'auto', maxHeight: 'calc(100vh - 250px)' }}>
+    <div ref={boxRef} style={{ background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 8, overflow: 'auto', maxHeight: 'calc(100vh - 250px)' }}>
       <div style={{ width: LW + W, minWidth: '100%' }}>
         <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 5, background: V.head, borderBottom: `1px solid ${V.line3}` }}>
           <div style={{ width: LW, flex: 'none', position: 'sticky', left: 0, zIndex: 6, background: V.head, padding: '8px 14px', fontSize: 12, color: V.muted, borderRight: `1px solid ${V.line3}`, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 4, alignItems: 'flex-start' }}><span>{headLabel}</span>{focusHint(F)}</div>
