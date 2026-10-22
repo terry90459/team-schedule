@@ -1236,6 +1236,11 @@ function MemberPanel({ S, roA, onRemove, onClose, team }) {
   );
 }
 
+// 提示列：放在捲動區外面，不會被固定的表頭蓋住
+function HintBar({ children }) {
+  return <div style={{ flex: 'none', padding: '7px 24px', fontSize: 12, lineHeight: 1.5, color: V.muted, background: V.tint, borderBottom: `1px solid ${V.line}` }}>ⓘ {children}</div>;
+}
+
 function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
   const [sortKey, setSortKey] = useState('order');
   const [sortDir, setSortDir] = useState(1);
@@ -1456,11 +1461,9 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
           {S.rows.length === 0 ? <div style={{ background: V.surface, border: `1px dashed ${V.line3}`, borderRadius: 10, padding: 48, textAlign: 'center', fontSize: 14, color: V.muted2 }}>工程清單中還沒有資料。</div> : <Gantt D={D} picked={picked} setPicked={setPicked} />}
         </div>
       )}
+      {eview === 'list' && !canDrag && !ro && S.rows.length > 1 && <HintBar>目前是排序／篩選檢視，無法調整順序。把排序改成「自訂順序」並清除篩選與搜尋後，就能拖曳每列左側的 ⋮⋮ 換位置。</HintBar>}
       <div ref={scroller} style={{ flex: 1, overflow: 'auto', padding: '18px 24px 40px', display: eview === 'list' ? undefined : 'none' }}>
         <div style={{ width: cols.reduce((a, b) => a + b, 0) + 2, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {!canDrag && !ro && S.rows.length > 1 && (
-            <div style={{ fontSize: 12, color: V.muted2 }}>目前是排序／篩選檢視，無法調整順序。把排序改成「自訂順序」並清除篩選與搜尋後，就能拖曳每列左側的 ⋮⋮ 換位置。</div>
-          )}
           <div style={{ display: 'grid', gridTemplateColumns: gridOf(cols), position: 'sticky', top: 0, zIndex: 6, background: V.head, border: `1px solid ${V.line3}`, borderRadius: 8, boxShadow: `0 -18px 0 ${V.bg}` }}>
             {HEADS.map(([en, zh], i) => (
               <div key={i} style={{ position: 'relative', padding: '8px 10px', fontSize: 12, fontWeight: 500, color: V.ink2, display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', overflow: 'hidden' }}>
@@ -2056,8 +2059,8 @@ function PlanPage({ S }) {
           <button className="btn-dark" disabled={ro} onClick={() => S.addPlan(mf)} style={{ ...darkBtn, opacity: ro ? 0.5 : 1 }}>＋ 新增排程</button>
         </div>
       </div>
+      {S.machines.length === 0 && <HintBar>機台名稱來自「工程清單」頁的「機台清單」，請先在那裡建立機台。</HintBar>}
       <div style={{ flex: 1, overflow: 'auto', padding: '18px 24px 40px' }}>
-        {S.machines.length === 0 && <div style={{ fontSize: 12, color: V.muted2, marginBottom: 10 }}>機台名稱來自「工程清單」頁的「機台清單」，請先在那裡建立機台。</div>}
         {mode === 'time' ? <PlanTimeline plans={list} machineNames={used} /> : (
           <div style={{ width: total, display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={{ display: 'grid', gridTemplateColumns: gridOf(pcols), position: 'sticky', top: 0, zIndex: 6, background: V.head, border: `1px solid ${V.line3}`, borderRadius: 8, boxShadow: `0 -18px 0 ${V.bg}` }}>
@@ -2169,8 +2172,12 @@ function DailyPage({ S, D, openLogs }) {
   );
 }
 
+const THEMES = [['light', '淺色'], ['dark', '深色'], ['auto', '跟隨電腦設定']];
+const applyTheme = (t) => { const r = document.documentElement; if (t === 'auto') r.removeAttribute('data-theme'); else r.setAttribute('data-theme', t); };
 function SettingsMenu({ S }) {
   const [open, setOpen] = useState(false);
+  const [theme, setThemeState] = useState(() => lsGet('theme') || 'light');
+  const setTheme = (t) => { setThemeState(t); lsSet('theme', t); applyTheme(t); };
   const wd = !!S.settings.workdays;
   const opt = (v, t, sub) => (
     <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '6px 4px', cursor: S.canAdmin ? 'pointer' : 'default', fontSize: 13 }}>
@@ -2188,6 +2195,10 @@ function SettingsMenu({ S }) {
             <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4 }}>預計天數怎麼算（全體共用{S.canAdmin ? '' : '，只有管理員能改'}）</div>
             {opt(false, '日曆天', '含週末，從截止日往回推')}
             {opt(true, '只算工作天', '跳過週六、週日，從截止日往回推')}
+            <div style={{ fontSize: 12, fontWeight: 500, margin: '10px 0 6px', paddingTop: 10, borderTop: `1px solid ${V.line}` }}>外觀（只影響這台電腦）</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {THEMES.map(([k, l]) => <button key={k} onClick={() => setTheme(k)} style={{ ...FSEL, flex: 1, height: 28, ...(theme === k ? FON : null) }}>{l}</button>)}
+            </div>
           </div>
         </>
       )}
@@ -2415,7 +2426,16 @@ function App({ sb = null, profile = null }) {
   const closeLogs = useCallback(() => setLogRowId(null), []);
   const logRow = logRowId && S.rows.find((r) => r.id === logRowId);
   const D = useMemo(() => derive(S.rows, S.owners, S.settings), [S.rows, S.owners, S.settings]);
-  const last = S.rows.map((r) => r.updated || '').sort().pop() || '—';
+  // 最後更新：工程清單、生產排程、進度紀錄、附件裡最新的一筆
+  const last = useMemo(() => {
+    let best = { t: '', who: '', what: '' };
+    const see = (t, who, what) => { if (t && t > best.t) best = { t, who: who || '', what }; };
+    S.rows.forEach((r) => see(r.updated, r.updatedBy, '工程清單'));
+    S.plans.forEach((p) => see(p.updated, p.updatedBy, '生產排程'));
+    S.logs.forEach((l) => { see(l.created, l.author, '進度紀錄'); see(l.updated, l.author, '進度紀錄'); });
+    S.filesByRow.forEach((fs) => fs.forEach((f) => see(f.created, '', '附件')));
+    return best;
+  }, [S.rows, S.plans, S.logs, S.filesByRow]);
   const tabs = [['overview', '總覽'], ['daily', '每日'], ['combo', '複合排程'], ['list', '工程清單'], ['plan', '生產排程'], ['board', '卡片看板'], ...(isAdmin ? [['accounts', '帳號管理']] : [])];
   const badge =
     S.mode === 'connecting' ? ['連線中…', V.muted2] :
@@ -2445,7 +2465,10 @@ function App({ sb = null, profile = null }) {
           </label>}
           <SettingsMenu S={S} />
           <span style={{ fontSize: 12, color: badge[1], whiteSpace: 'nowrap' }}>{badge[0]}</span>
-          <span style={{ fontFamily: MONO, fontSize: 11, color: V.muted2, whiteSpace: 'nowrap' }}>更新 {last}</span>
+          <span title={last.t ? `最後一筆修改：${last.what}${last.who ? '・' + last.who : ''}（${last.t}）` : '還沒有任何修改'} style={{ fontSize: 11, color: V.muted2, whiteSpace: 'nowrap', display: 'flex', flexDirection: 'column', lineHeight: 1.25, alignItems: 'flex-end' }}>
+            <span>最後更新 <span style={{ fontFamily: MONO }}>{last.t ? last.t.slice(5) : '—'}</span></span>
+            {last.t && <span style={{ fontSize: 10.5, color: V.faint }}>{last.what}{last.who ? '・' + last.who : ''}</span>}
+          </span>
         </div>
       </header>
 
