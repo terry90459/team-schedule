@@ -31,12 +31,14 @@ const LIGHT = `--bg:#f4f3ef;--surface:#ffffff;--surface2:#fbfaf7;--tint:#faf9f6;
 --line:#ebe8e2;--line2:#d9d5cc;--line3:#cfcbc2;
 --ink:#1f1e1b;--ink2:#3a3833;--muted:#6b6862;--muted2:#7a766e;--faint:#9a968e;
 --head:#efede8;--headHover:#e7e4dd;--btnBg:#1f1e1b;--btnFg:#f6f5f2;
---todayBg:oklch(0.965 0.02 250);--todayHead:oklch(0.93 0.03 250);--accent:oklch(0.5 0.12 250);--link:oklch(0.48 0.12 250);--linkHover:oklch(0.38 0.12 250);--rowHover:#fbfaf7;--delBg:oklch(0.95 0.03 25);--delFg:oklch(0.5 0.14 25);`;
+--todayBg:oklch(0.965 0.02 250);--todayHead:oklch(0.93 0.03 250);--accent:oklch(0.5 0.12 250);--link:oklch(0.48 0.12 250);--linkHover:oklch(0.38 0.12 250);--rowHover:#fbfaf7;--delBg:oklch(0.95 0.03 25);--delFg:oklch(0.5 0.14 25);
+--holHead:#141414;--holFg:#ffffff;--holBody:rgba(20,20,20,0.50);`;
 const DARK = `--bg:#161513;--surface:#1f1e1b;--surface2:#1b1a17;--tint:#232220;
 --line:#2c2a26;--line2:#3a3833;--line3:#4a4741;
 --ink:#f1efe9;--ink2:#d9d6ce;--muted:#a8a49a;--muted2:#8f8b82;--faint:#75726a;
 --head:#26241f;--headHover:#2e2c27;--btnBg:#f1efe9;--btnFg:#1b1a17;
---todayBg:oklch(0.28 0.03 250);--todayHead:oklch(0.33 0.05 250);--accent:oklch(0.78 0.11 250);--link:oklch(0.78 0.11 250);--linkHover:oklch(0.86 0.09 250);--rowHover:#232220;--delBg:oklch(0.3 0.05 25);--delFg:oklch(0.8 0.12 25);`;
+--todayBg:oklch(0.28 0.03 250);--todayHead:oklch(0.33 0.05 250);--accent:oklch(0.78 0.11 250);--link:oklch(0.78 0.11 250);--linkHover:oklch(0.86 0.09 250);--rowHover:#232220;--delBg:oklch(0.3 0.05 25);--delFg:oklch(0.8 0.12 25);
+--holHead:#000000;--holFg:#e8e6e0;--holBody:rgba(0,0,0,0.60);`;
 const CSS = `
 :root{${LIGHT}color-scheme:light}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){${DARK}color-scheme:dark}}

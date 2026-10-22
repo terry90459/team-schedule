@@ -20,6 +20,8 @@ create table if not exists public.profiles (
 );
 alter table public.profiles add column if not exists status text;
 alter table public.profiles add column if not exists is_owner boolean not null default false;
+-- 可見分頁：內部帳號 null = 全部分頁；客戶帳號 = 綁定的分頁（見第 9 節）
+alter table public.profiles add column if not exists tabs text[];
 
 -- 舊版資料轉換：role 裡的 pending → status；editor → engineer
 alter table public.profiles drop constraint if exists profiles_role_check;
@@ -36,8 +38,8 @@ alter table public.profiles alter column status set default 'pending';
 alter table public.profiles alter column status set not null;
 alter table public.profiles alter column role set default 'viewer';
 -- 新註冊的人預設「只能看」；尚未核准的舊帳號也一併改成只能看（核准前管理員仍可改）
-update public.profiles set role = 'viewer' where status = 'pending' and not is_owner;
-alter table public.profiles add constraint profiles_role_check check (role in ('viewer', 'engineer', 'planner', 'admin'));
+update public.profiles set role = 'viewer' where status = 'pending' and not is_owner and role not in ('viewer', 'customer');
+alter table public.profiles add constraint profiles_role_check check (role in ('viewer', 'engineer', 'planner', 'admin', 'customer'));
 alter table public.profiles add constraint profiles_status_check check (status in ('pending', 'active', 'disabled'));
 create unique index if not exists profiles_one_owner on public.profiles (is_owner) where is_owner;
 
@@ -108,7 +110,7 @@ grant execute on function public.email_allowed(text) to anon, authenticated;
 -- 註冊時自動建立 profile
 create or replace function public.handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$
-declare first boolean;
+declare first boolean; cust text; e text := lower(btrim(new.email));
 begin
   perform pg_advisory_xact_lock(4242);  -- 避免兩人同時註冊都變成管理員
   first := not exists (select 1 from public.profiles where role = 'admin' and status = 'active');
@@ -116,14 +118,21 @@ begin
   if not first and not public.email_allowed(new.email) then
     raise exception '此信箱不在允許註冊名單內' using errcode = 'P0001';
   end if;
-  insert into public.profiles (id, email, name, role, status, is_owner)
+  -- 名單上有指定客戶分頁 → 註冊成該客戶的客戶帳號（單一信箱優先於網域）
+  if not first then
+    select customer_id into cust from public.signup_allow
+     where pattern in (e, '@' || split_part(e, '@', 2)) and customer_id is not null
+     order by (pattern = e) desc limit 1;
+  end if;
+  insert into public.profiles (id, email, name, role, status, is_owner, tabs)
   values (
     new.id,
     new.email,
     coalesce(nullif(trim(new.raw_user_meta_data ->> 'name'), ''), split_part(new.email, '@', 1)),
-    case when first then 'admin' else 'viewer' end,
+    case when first then 'admin' when cust is not null then 'customer' else 'viewer' end,
     case when first then 'active' else 'pending' end,
-    first and not exists (select 1 from public.profiles where is_owner)
+    first and not exists (select 1 from public.profiles where is_owner),
+    case when cust is not null then array[cust] end
   )
   on conflict (id) do nothing;
   return new;
@@ -370,6 +379,8 @@ begin
   end if;
   -- 停用：從成員清單移除（他名下的工作會在工程清單顯示警示）；恢復時會重新加入
   if new.status = 'disabled' then delete from public.members where profile_id = new.id; return new; end if;
+  -- 客戶帳號不屬於團隊成員
+  if new.role = 'customer' then delete from public.members where profile_id = new.id; return new; end if;
   if new.status <> 'active' or new.role not in ('engineer', 'planner', 'admin') then return new; end if;
   tm := case new.role when 'planner' then 'planner' when 'engineer' then 'engineer' else null end;
   select * into m from public.members where profile_id = new.id;
@@ -495,6 +506,139 @@ revoke execute on function public.keepalive() from public;
 grant execute on function public.keepalive() to anon, authenticated;
 
 -- ---------------------------------------------------------------------
+-- 9. 客戶分頁與可見範圍
+--    · 工程清單、生產排程的每一筆都屬於一個分頁（customer_id），由所在分頁自動決定
+--    · 管理員：看得到全部；只能看／工程師／Planner：profiles.tabs 是 null = 全部，否則只限這些分頁
+--    · 客戶帳號（role = customer）：一律唯讀，只能透過 cust_items / cust_plans 讀自己分頁的部分欄位；
+--      基本資料表、進度紀錄、附件、成員、機台、設定都讀不到
+--    （public repo：第一次建立時分頁叫「客戶 1」，請在網頁上改成實際客戶名稱）
+-- ---------------------------------------------------------------------
+do $$
+begin
+  if to_regclass('public.customers') is null then
+    create table public.customers (
+      id        text primary key,
+      name      text not null,
+      sort      int  not null default 0,
+      internal  boolean not null default false     -- 內部分頁：客戶帳號不能綁定
+    );
+    insert into public.customers (id, name, sort, internal) values ('c1', '客戶 1', 0, false), ('c_internal', '內部', 1, true);
+  end if;
+end $$;
+create unique index if not exists customers_name_uidx on public.customers (lower(name));
+
+alter table public.eng_items  add column if not exists customer_id text references public.customers(id) on delete restrict;
+alter table public.prod_plans add column if not exists customer_id text references public.customers(id) on delete restrict;
+alter table public.signup_allow add column if not exists customer_id text references public.customers(id) on delete set null;
+create index if not exists eng_items_customer_idx on public.eng_items (customer_id);
+create index if not exists prod_plans_customer_idx on public.prod_plans (customer_id);
+-- 舊資料：還沒有分頁的，放到第一個客戶分頁（只在剛建立分頁時做；之後沒分頁的會在網頁顯示「未分類」）
+do $$
+begin
+  if not exists (select 1 from public.eng_items where customer_id is not null)
+     and not exists (select 1 from public.prod_plans where customer_id is not null) then
+    perform set_config('app.skip_stamp', 'on', true);
+    update public.eng_items  set customer_id = (select id from public.customers where not internal order by sort, id limit 1) where customer_id is null;
+    update public.prod_plans set customer_id = (select id from public.customers where not internal order by sort, id limit 1) where customer_id is null;
+    perform set_config('app.skip_stamp', 'off', true);
+  end if;
+end $$;
+
+create or replace function public.my_tabs() returns text[]
+language sql stable security definer set search_path = public as $$
+  select tabs from public.profiles where id = auth.uid();
+$$;
+-- 內部帳號能不能看／改這個分頁（客戶帳號一律 false：客戶只走 cust_* 檢視表）
+create or replace function public.can_tab(cid text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select case public.app_role()
+    when 'admin' then true
+    when 'viewer' then coalesce((select tabs is null or cid = any(tabs) from public.profiles where id = auth.uid()), false)
+    when 'engineer' then coalesce((select tabs is null or cid = any(tabs) from public.profiles where id = auth.uid()), false)
+    when 'planner' then coalesce((select tabs is null or cid = any(tabs) from public.profiles where id = auth.uid()), false)
+    else false end;
+$$;
+
+-- 客戶帳號不能綁內部分頁；內部帳號的 tabs 只能填存在的分頁
+create or replace function public.guard_tabs() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.tabs is not null then
+    new.tabs := (select array_agg(distinct t) from unnest(new.tabs) t where exists (select 1 from public.customers c where c.id = t));
+  end if;
+  if new.role = 'customer' and exists (select 1 from public.customers c where c.id = any(coalesce(new.tabs, '{}')) and c.internal) then
+    raise exception '客戶帳號不能指定內部分頁';
+  end if;
+  return new;
+end $$;
+drop trigger if exists guard_tabs on public.profiles;
+create trigger guard_tabs before insert or update on public.profiles
+  for each row execute function public.guard_tabs();
+
+-- 權限：覆蓋第 3 節對這幾個資料表的設定
+alter table public.customers enable row level security;
+drop policy if exists "read" on public.customers;
+create policy "read" on public.customers for select to authenticated
+  using (public.can_tab(id) or (public.app_role() = 'customer' and id = any(coalesce(public.my_tabs(), '{}')) and not internal));
+drop policy if exists "insert" on public.customers;
+create policy "insert" on public.customers for insert to authenticated with check (public.is_admin());
+drop policy if exists "update" on public.customers;
+create policy "update" on public.customers for update to authenticated using (public.is_admin()) with check (public.is_admin());
+drop policy if exists "delete" on public.customers;
+create policy "delete" on public.customers for delete to authenticated using (public.is_admin());
+revoke all on public.customers from anon;
+grant select, insert, update, delete on public.customers to authenticated;
+
+do $$
+declare t text; w text;
+begin
+  foreach t in array array['eng_items', 'prod_plans'] loop
+    w := case t when 'eng_items' then 'public.can_eng()' else 'public.can_plan()' end;
+    execute format('drop policy if exists "read" on public.%I', t);
+    execute format('drop policy if exists "insert" on public.%I', t);
+    execute format('drop policy if exists "update" on public.%I', t);
+    execute format('drop policy if exists "delete" on public.%I', t);
+    execute format('create policy "read" on public.%I for select to authenticated using (public.can_read() and public.can_tab(customer_id))', t);
+    execute format('create policy "insert" on public.%I for insert to authenticated with check (%s and public.can_tab(customer_id))', t, w);
+    execute format('create policy "update" on public.%I for update to authenticated using (%s and public.can_tab(customer_id)) with check (%s and public.can_tab(customer_id))', t, w, w);
+    execute format('create policy "delete" on public.%I for delete to authenticated using (%s and public.can_tab(customer_id))', t, w);
+  end loop;
+  -- 進度紀錄、附件：跟著所屬工程項目（子查詢會套用 eng_items 的權限）
+  foreach t in array array['eng_logs', 'eng_files'] loop
+    execute format('drop policy if exists "read" on public.%I', t);
+    execute format('drop policy if exists "insert" on public.%I', t);
+    execute format('drop policy if exists "update" on public.%I', t);
+    execute format('drop policy if exists "delete" on public.%I', t);
+    execute format('create policy "read" on public.%I for select to authenticated using (public.can_read() and row_id in (select id from public.eng_items))', t);
+    execute format('create policy "insert" on public.%I for insert to authenticated with check (public.can_eng() and row_id in (select id from public.eng_items))', t);
+    execute format('create policy "update" on public.%I for update to authenticated using (public.can_eng() and row_id in (select id from public.eng_items)) with check (public.can_eng() and row_id in (select id from public.eng_items))', t);
+    execute format('create policy "delete" on public.%I for delete to authenticated using (public.can_eng() and row_id in (select id from public.eng_items))', t);
+  end loop;
+end $$;
+
+-- 客戶帳號專用：只有開放的欄位、只有自己的分頁、只能讀
+--   工程清單：工作項目、負責人、客戶 Owner、機台、狀態、截止日、備註（不含優先度、天數、更新者、紀錄、附件）
+--   生產排程：機台、Group、產品、開始日、結束日（不含 HW、備註、更新者）
+create or replace view public.cust_items as
+  select i.id, i.item, i.owner, i.cust_owner, i.machine, i.status, i.due, i.remark, i.sort_order, i.customer_id
+    from public.eng_items i join public.customers c on c.id = i.customer_id and not c.internal
+   where public.app_role() = 'customer' and i.customer_id = any(coalesce(public.my_tabs(), '{}'));
+create or replace view public.cust_plans as
+  select p.id, p.machine, p.grp, p.product, p.start_date, p.end_date, p.customer_id
+    from public.prod_plans p join public.customers c on c.id = p.customer_id and not c.internal
+   where public.app_role() = 'customer' and p.customer_id = any(coalesce(public.my_tabs(), '{}'));
+revoke all on public.cust_items, public.cust_plans from public, anon;
+grant select on public.cust_items, public.cust_plans to authenticated;
+
+-- 即時同步加入分頁清單
+do $$
+begin
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'customers') then
+    alter publication supabase_realtime add table public.customers;
+  end if;
+end $$;
+
+-- ---------------------------------------------------------------------
 -- 7. 備份還原（只限最高管理員）
 --    匯出由網頁直接讀各資料表；還原在這個函式裡一次完成，中途出錯就全部不變
 --    登入帳號（profiles）不會被還原：只還原工作資料、成員、機台、設定與允許註冊名單
@@ -515,6 +659,13 @@ begin
   delete from public.eng_files; delete from public.eng_logs; delete from public.eng_items;
   delete from public.prod_plans; delete from public.machines; delete from public.settings;
   delete from public.members;
+  -- 分頁：備份裡有才取代（v2 以前的備份沒有分頁，還原後項目會出現在「未分類」）
+  if t ? 'customers' then
+    update public.signup_allow set customer_id = null;
+    delete from public.customers;
+    insert into public.customers select * from jsonb_populate_recordset(null::public.customers, t -> 'customers');
+    get diagnostics n = row_count; out := out || jsonb_build_object('customers', n);
+  end if;
 
   insert into public.eng_items  select * from jsonb_populate_recordset(null::public.eng_items,  coalesce(t -> 'eng_items',  '[]'));
   get diagnostics n = row_count; out := out || jsonb_build_object('eng_items', n);
@@ -555,6 +706,6 @@ grant execute on function public.restore_backup(jsonb) to authenticated;
 --    （放在檔案最後：前面全部執行成功才會更新版本號）
 -- ---------------------------------------------------------------------
 create or replace function public.schema_version() returns int
-language sql immutable as $$ select 2 $$;
+language sql immutable as $$ select 3 $$;
 revoke execute on function public.schema_version() from public;
 grant execute on function public.schema_version() to anon, authenticated;

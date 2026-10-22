@@ -69,6 +69,7 @@ const V = {
   ink: 'var(--ink)', ink2: 'var(--ink2)', muted: 'var(--muted)', muted2: 'var(--muted2)', faint: 'var(--faint)',
   head: 'var(--head)', btnBg: 'var(--btnBg)', btnFg: 'var(--btnFg)',
   todayBg: 'var(--todayBg)', todayHead: 'var(--todayHead)', accent: 'var(--accent)',
+  holHead: 'var(--holHead)', holFg: 'var(--holFg)', holBody: 'var(--holBody)',
 };
 const MONO = "'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace";
 
@@ -83,6 +84,31 @@ const stamp = (d = new Date()) =>
 const s2d = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
 const addD = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const diff = (a, b) => Math.round((a - b) / 86400000);
+
+/* ============================================================
+   台灣放假日（行政院人事行政總處「政府行政機關辦公日曆表」）
+   每年 6 月左右公布隔年日曆，請把隔年的日期加進來（TW_WORK = 補行上班的週六）
+   ============================================================ */
+const TW_OFF = {
+  '2026-01-01': '開國紀念日', '2026-02-15': '小年夜', '2026-02-16': '農曆除夕', '2026-02-17': '春節',
+  '2026-02-18': '春節', '2026-02-19': '春節', '2026-02-20': '補假', '2026-02-27': '補假',
+  '2026-02-28': '和平紀念日', '2026-04-03': '補假', '2026-04-04': '兒童節', '2026-04-05': '清明節',
+  '2026-04-06': '補假', '2026-05-01': '勞動節', '2026-06-19': '端午節', '2026-09-25': '中秋節',
+  '2026-09-28': '教師節', '2026-10-09': '補假', '2026-10-10': '國慶日', '2026-10-25': '光復節',
+  '2026-10-26': '補假', '2026-12-25': '行憲紀念日', '2027-01-01': '開國紀念日', '2027-02-04': '小年夜',
+  '2027-02-05': '農曆除夕', '2027-02-06': '春節', '2027-02-07': '春節', '2027-02-08': '春節',
+  '2027-02-09': '補假', '2027-02-10': '補假', '2027-02-28': '和平紀念日', '2027-03-01': '補假',
+  '2027-04-04': '兒童節', '2027-04-05': '清明節', '2027-04-06': '補假', '2027-04-30': '補假',
+  '2027-05-01': '勞動節', '2027-06-09': '端午節', '2027-09-15': '中秋節', '2027-09-28': '教師節',
+  '2027-10-10': '國慶日', '2027-10-11': '補假', '2027-10-25': '光復節', '2027-12-24': '補假',
+  '2027-12-25': '行憲紀念日', '2027-12-31': '補假',
+};
+const TW_WORK = new Set([]);
+const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const isWeekend = (d) => d.getDay() === 0 || d.getDay() === 6;
+// 放假日：週末（補班日除外）＋國定假日、補假
+const isOff = (d) => { const k = ymd(d); return TW_WORK.has(k) ? false : isWeekend(d) || k in TW_OFF; };
+const holName = (d) => TW_OFF[ymd(d)] || (TW_WORK.has(ymd(d)) ? '補班' : '');
 const hue = (s) => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
 const av = (name) =>
   name === UN
@@ -113,30 +139,33 @@ const SEED = [
      subscribe(res, cb, onErr) → unsubscribe     cb(list) 每次收到該資源完整清單
      create(res, id, body) / update(res, id, patch) / remove(res, id)
    ============================================================ */
-const RES = ['rows', 'plans', 'logs', 'files', 'members', 'machines', 'settings'];
+const RES = ['rows', 'plans', 'logs', 'files', 'members', 'machines', 'settings', 'customers'];
 
 // ---------- Supabase ----------
 // 這版網頁需要的資料庫版本（= supabase/schema.sql 最後的 schema_version()）；改 schema 時兩邊一起加 1
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const SCHEMA_URL = 'https://github.com/terry90459/team-schedule/blob/main/supabase/schema.sql';
-const SB_TABLE ={ rows: 'eng_items', plans: 'prod_plans', logs: 'eng_logs', files: 'eng_files', members: 'members', machines: 'machines', settings: 'settings' };
+const SB_TABLE = { rows: 'eng_items', plans: 'prod_plans', logs: 'eng_logs', files: 'eng_files', members: 'members', machines: 'machines', settings: 'settings', customers: 'customers' };
+// 客戶帳號：只讀資料庫開放的檢視表（部分欄位、只有自己的分頁），其他資源一律不讀
+const SB_CUST_VIEW = { rows: 'cust_items', plans: 'cust_plans' };
+const CUST_RES = new Set(['rows', 'plans', 'customers']);
 // 前端欄位 → 資料庫欄位（沒列出的同名）
 const SB_RENAME = {
-  rows: { custOwner: 'cust_owner', order: 'sort_order', updatedBy: 'updated_by' },
-  plans: { group: 'grp', start: 'start_date', end: 'end_date', updatedBy: 'updated_by' },
+  rows: { custOwner: 'cust_owner', order: 'sort_order', updatedBy: 'updated_by', customer: 'customer_id' },
+  plans: { group: 'grp', start: 'start_date', end: 'end_date', updatedBy: 'updated_by', customer: 'customer_id' },
   logs: { rowId: 'row_id', date: 'log_date', text: 'body' },
   files: { rowId: 'row_id' },
   members: { profileId: 'profile_id' },
 };
 const SB_READONLY = new Set(['profileId']); // 只能由資料庫設定（帳號連動）
 const SB_COLS = {
-  rows: ['item', 'owner', 'custOwner', 'machine', 'status', 'due', 'priority', 'remark', 'days', 'order', 'updated', 'updatedBy'],
-  plans: ['machine', 'group', 'product', 'hw', 'start', 'end', 'remark', 'updated', 'updatedBy'],
+  rows: ['item', 'owner', 'custOwner', 'machine', 'status', 'due', 'priority', 'remark', 'days', 'order', 'updated', 'updatedBy', 'customer'],
+  plans: ['machine', 'group', 'product', 'hw', 'start', 'end', 'remark', 'updated', 'updatedBy', 'customer'],
   logs: ['rowId', 'date', 'author', 'text', 'created', 'updated'],
   files: ['rowId', 'name', 'kind', 'url', 'created'],
-  members: ['name', 'sort', 'team', 'profileId'], machines: ['name'], settings: ['workdays'],
+  members: ['name', 'sort', 'team', 'profileId'], machines: ['name'], settings: ['workdays'], customers: ['name', 'sort', 'internal'],
 };
-const SB_NULL = new Set(['due', 'start', 'end', 'days', 'date']); // 空字串存成 NULL
+const SB_NULL = new Set(['due', 'start', 'end', 'days', 'date', 'customer']); // 空字串存成 NULL
 function toDb(res, obj) {
   const out = {}, ren = SB_RENAME[res] || {};
   for (const k of SB_COLS[res]) {
@@ -150,18 +179,19 @@ function toDb(res, obj) {
 }
 function fromDb(res, row) {
   const out = { id: row.id }, ren = SB_RENAME[res] || {};
-  for (const k of SB_COLS[res]) { const v = row[ren[k] || k]; out[k] = v === null || v === undefined ? (k === 'hw' || k === 'workdays' ? false : '') : v; }
+  for (const k of SB_COLS[res]) { const v = row[ren[k] || k]; out[k] = v === null || v === undefined ? (k === 'hw' || k === 'workdays' || k === 'internal' ? false : '') : v; }
   if (res === 'rows' && out.days !== '') out.days = Number(out.days);
   return out;
 }
 const POLL_MS = 20000;
-function supabaseBackend(sb, onLive) {
+function supabaseBackend(sb, onLive, cust) {
   const reg = {}, live = {};
   const setLive = (res, v) => { live[res] = v; onLive && onLive(Object.values(live).every(Boolean)); };
   return {
     kind: 'sb',
     subscribe(res, cb, onErr) {
-      const T = SB_TABLE[res];
+      if (cust && !CUST_RES.has(res)) { cb([]); return () => {}; }
+      const T = (cust && SB_CUST_VIEW[res]) || SB_TABLE[res];
       let map = new Map(), alive = true, timer = null;
       const emit = () => { if (alive) cb([...map.values()]); };
       const load = async () => {
@@ -177,6 +207,10 @@ function supabaseBackend(sb, onLive) {
       };
       reg[res] = { put: (row) => { map.set(row.id, fromDb(res, row)); emit(); }, drop: (id) => { map.delete(id); emit(); }, load };
       load();
+      if (cust) {   // 客戶帳號讀不到基本資料表的即時通知，固定每 20 秒重新讀取
+        timer = setInterval(load, POLL_MS);
+        return () => { alive = false; clearInterval(timer); };
+      }
       // 即時同步；公司網路若擋 WebSocket，就退回每 20 秒重新讀取
       const ch = sb.channel('rt-' + T)
         .on('postgres_changes', { event: '*', schema: 'public', table: T }, (p) => {
@@ -218,7 +252,7 @@ function supabaseBackend(sb, onLive) {
 
 // ---------- 沒設定 Supabase 時：存在這台裝置（試用／開發用）----------
 function localBackend() {
-  const KEY = { rows: 'worklist.v2', plans: 'worklist.plan.v1', logs: 'worklist.logs.v1', files: 'worklist.files.v1', members: 'worklist.members.v1', machines: 'worklist.machines.v2', settings: 'worklist.settings.v1' };
+  const KEY = { rows: 'worklist.v2', plans: 'worklist.plan.v1', logs: 'worklist.logs.v1', files: 'worklist.files.v1', members: 'worklist.members.v1', machines: 'worklist.machines.v2', settings: 'worklist.settings.v1', customers: 'worklist.customers.v1' };
   const read = (k) => { try { const a = JSON.parse(localStorage.getItem(k) || 'null'); return Array.isArray(a) ? a : null; } catch (e) { return null; } };
   const data = {}, subs = {};
   RES.forEach((r) => { data[r] = read(KEY[r]) || (r === 'rows' ? SEED : []); subs[r] = new Set(); });
@@ -252,6 +286,7 @@ function useStore(sb, profile) {
   const me = profile ? profile.name : localMe;
   // 角色：engineer 改工程清單／紀錄／附件；planner 改生產排程；admin 全部（含成員、機台、設定）；viewer 只能看
   const role = profile ? (profile.status && profile.status !== 'active' ? 'none' : profile.role === 'editor' ? 'engineer' : profile.role) : 'admin';
+  const isCust = role === 'customer';   // 客戶帳號：全站唯讀，只有自己的分頁
   const canEngR = role === 'engineer' || role === 'admin', canPlanR = role === 'planner' || role === 'admin';
   const readOnly = !canEngR && !canPlanR;
   const S = useRef({ be: null, assets: null, queues: {}, d: null }).current;
@@ -263,7 +298,7 @@ function useStore(sb, profile) {
     let dead = false;
     const unsubs = [];
     (async () => {
-      const be = sb ? supabaseBackend(sb, setLive) : localBackend();
+      const be = sb ? supabaseBackend(sb, setLive, isCust) : localBackend();
       S.be = be;
       const onErr = (e) => { if (!S.errShown) { S.errShown = true; say('讀取資料失敗：' + ((e && (e.message || e.code)) || '未知原因') + '。請重新整理頁面。'); } };
       RES.forEach((r) => unsubs.push(be.subscribe(r, (list) => setD((x) => ({ ...x, [r]: list })), onErr)));
@@ -295,6 +330,7 @@ function useStore(sb, profile) {
   const planners = useMemo(() => uniqNames(memberList.filter((m) => m.team === 'planner')), [memberList]);
   const machines = useMemo(() => uniqNames(d.machines).sort(byName), [d.machines]);
   const settings = d.settings.find((x) => x.id === 'app') || {};
+  const customers = useMemo(() => [...d.customers].sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0) || byName(a.name, b.name)), [d.customers]);
   // 附件：files 資源＋舊版存在 row.files 的
   const filesByRow = useMemo(() => {
     const m = new Map();
@@ -308,9 +344,9 @@ function useStore(sb, profile) {
   const offerUndo = (text, snap) => say(text, { label: '復原', run: () => { setNotice(null); restore(snap); } });
 
   const api = {
-    rows, owners, planners, machines, settings, plans: d.plans, logs: d.logs, members: memberList, filesByRow,
+    rows, owners, planners, machines, settings, plans: d.plans, logs: d.logs, members: memberList, filesByRow, customers,
     mode, live, readOnly, notice, me, profile,
-    role,
+    role, isCust,
     canEdit: canEngR && mode !== 'connecting',   // 工程清單、進度紀錄、附件
     canPlan: canPlanR && mode !== 'connecting',  // 機台生產排程
     canAdmin: role === 'admin' && mode !== 'connecting', // 成員／機台清單、共用設定
@@ -362,11 +398,38 @@ function useStore(sb, profile) {
     setSetting(p) { return d.settings.some((x) => x.id === 'app') ? U('settings', 'app', p) : C('settings', 'app', p); },
     // 生產排程
     patchPlan(id, p) { return U('plans', id, { ...p, ...who() }); },
-    addPlan(machine, copy) {
+    addPlan(machine, copy, extra) {
       const id = 'p' + uid().slice(1);
       const base = copy ? strip(copy) : { machine: machine || '', group: '', product: '', hw: false, start: '', end: '', remark: '' };
-      return C('plans', id, { ...base, ...who() }).then(() => id);
+      return C('plans', id, { ...base, ...extra, ...who() }).then(() => id);
     },
+    // 分頁（客戶別）：管理員新增／改名／排序／刪除（裡面要是空的）
+    addTab(name) {
+      const n = (name || '').trim(); if (!n) return;
+      if (customers.some((c) => c.name.toLowerCase() === n.toLowerCase())) { say(`「${n}」已經有了`); return; }
+      const id = 'c' + uid().slice(1);
+      return C('customers', id, { name: n, sort: customers.reduce((m, c) => Math.max(m, c.sort ?? 0), 0) + 1, internal: false }).then(() => id);
+    },
+    renameTab(id, name) {
+      const n = (name || '').trim(); if (!n) return;
+      if (customers.some((c) => c.id !== id && c.name.toLowerCase() === n.toLowerCase())) { say(`「${n}」已經有了`); return; }
+      return U('customers', id, { name: n });
+    },
+    async shiftTab(id, dir) {
+      const i = customers.findIndex((c) => c.id === id), j = i + dir;
+      if (i < 0 || j < 0 || j >= customers.length) return;
+      const l = [...customers]; [l[i], l[j]] = [l[j], l[i]];
+      for (let k = 0; k < l.length; k++) if (l[k].sort !== k) await U('customers', l[k].id, { sort: k });
+    },
+    async delTab(id) {
+      const c = customers.find((x) => x.id === id); if (!c) return;
+      const n = d.rows.filter((r) => r.customer === id).length + d.plans.filter((p) => p.customer === id).length;
+      if (n) { say(`「${c.name}」還有 ${n} 筆資料，請先移到其他分頁或刪除`); return; }
+      await X('customers', id);
+    },
+    // 移到其他分頁
+    moveRowTab(id, tab) { return U('rows', id, { customer: tab, ...who() }); },
+    movePlanTab(id, tab) { return U('plans', id, { customer: tab, ...who() }); },
     async delPlan(id) {
       const p = d.plans.find((x) => x.id === id); if (!p) return;
       await X('plans', id);
@@ -447,11 +510,11 @@ function useStore(sb, profile) {
 /* ============================================================
    共用：資料衍生（儀表板用）
    ============================================================ */
-// B9：從截止日往回推開始日；workdays=true 時跳過六日
+// B9：從截止日往回推開始日；workdays=true 時跳過週末與國定假日（補班日算工作天）
 function backDays(due, n, workdays) {
   if (!workdays) return addD(due, -(n - 1));
   let d = new Date(due), left = n - 1;
-  while (left > 0) { d = addD(d, -1); if (d.getDay() !== 0 && d.getDay() !== 6) left--; }
+  while (left > 0) { d = addD(d, -1); if (!isOff(d)) left--; }
   return d;
 }
 function derive(rowsIn, owners, settings) {
@@ -753,7 +816,8 @@ function WorkCard({ r, rank, S, ro, dnd, canDrag, first, last, dragging, over, c
   const dinfo = dueInfo(r, today);
   if (dinfo) dueFg = dinfo.fg;
   const lastLog = logs && logs[0];
-  const ownerGone = !!r.owner && !S.owners.includes(r.owner) && r.status !== '已完成';
+  const ownerGone = !S.isCust && !!r.owner && !S.owners.includes(r.owner) && r.status !== '已完成';
+  const cu = S.isCust;
   const ownerOpts = r.owner && !S.owners.includes(r.owner) ? [...S.owners, r.owner] : S.owners;
   const files = S.filesByRow.get(r.id) || [];
   const machineOpts = [...new Set([...(S.machines || []), ...(r.machine ? [r.machine] : [])])].sort(byName);
@@ -764,8 +828,8 @@ function WorkCard({ r, rank, S, ro, dnd, canDrag, first, last, dragging, over, c
   return (
     <div data-card="1" onDragOver={(e) => dnd.over(e, r)} onDrop={(e) => dnd.drop(e, r)} style={{ position: 'relative', opacity: dragging ? 0.4 : 1 }}>
       {over === 'before' && <div style={{ ...line, top: -5 }} />}
-      <div className="wcard" style={{ display: 'grid', gridTemplateColumns: gridOf(cols), alignItems: 'stretch', background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 8, minHeight: 46 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 0, padding: '0 2px 0 0', background: V.tint, borderRight: `1px solid ${V.line}`, borderRadius: '8px 0 0 8px' }}>
+      <div className="wcard" style={{ display: 'grid', gridTemplateColumns: gridOf(visCols(S, cols, CUST_ENG_COLS)), alignItems: 'stretch', background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 8, minHeight: 46 }}>
+        {!cu && <div style={{ display: 'flex', alignItems: 'center', gap: 0, padding: '0 2px 0 0', background: V.tint, borderRight: `1px solid ${V.line}`, borderRadius: '8px 0 0 8px' }}>
           <div className={canDrag ? 'grip' : ''} draggable={canDrag} title={canDrag ? '按住拖曳，調整順序' : why}
             onDragStart={(e) => dnd.start(e, r.id)} onDragEnd={dnd.end}
             style={{ cursor: canDrag ? 'grab' : 'not-allowed', padding: '8px 0 8px 4px', marginRight: 10, fontSize: 24, letterSpacing: -5, lineHeight: 1, userSelect: 'none', color: canDrag ? V.muted : V.faint }}>⋮⋮</div>
@@ -774,7 +838,7 @@ function WorkCard({ r, rank, S, ro, dnd, canDrag, first, last, dragging, over, c
             <button className="mv" disabled={!canDrag || first} onClick={() => dnd.step(r.id, -1)} title="上移一格" style={mvBtn}>▲</button>
             <button className="mv" disabled={!canDrag || last} onClick={() => dnd.step(r.id, 1)} title="下移一格" style={mvBtn}>▼</button>
           </div>
-        </div>
+        </div>}
         <div style={cell}>
           <CellText multiline grow enterBlur className="cin" value={r.item} onCommit={set('item')} disabled={ro} placeholder="工作項目" style={cin({ fontWeight: 600, height: 'auto', minHeight: 30, padding: '5px 8px', lineHeight: 1.45, resize: 'none', overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word' })} />
         </div>
@@ -796,7 +860,7 @@ function WorkCard({ r, rank, S, ro, dnd, canDrag, first, last, dragging, over, c
               <option value="">—</option>
               {machineOpts.map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
-            {clash && clash.length > 0 && <span title={'與生產排程時間重疊：\n' + clash.map((p) => `${p.start} → ${p.end}  ${[p.group, p.product].filter(Boolean).join(' · ').replace(/\n/g, ' ')}`).join('\n')} style={{ fontSize: 10.5, color: CLASH, padding: '0 6px', lineHeight: 1.2, fontWeight: 500, cursor: 'help' }}>⚠ 生產重疊 {clash.length}</span>}
+            {!cu && clash && clash.length > 0 && <span title={'與生產排程時間重疊：\n' + clash.map((p) => `${p.start} → ${p.end}  ${[p.group, p.product].filter(Boolean).join(' · ').replace(/\n/g, ' ')}`).join('\n')} style={{ fontSize: 10.5, color: CLASH, padding: '0 6px', lineHeight: 1.2, fontWeight: 500, cursor: 'help' }}>⚠ 生產重疊 {clash.length}</span>}
           </div>
         </div>
         <div style={{ ...cell, padding: '4px 6px' }}>
@@ -811,6 +875,7 @@ function WorkCard({ r, rank, S, ro, dnd, canDrag, first, last, dragging, over, c
             {dinfo && <span style={{ fontSize: 10.5, color: dinfo.fg, padding: '0 5px', lineHeight: 1.2, fontWeight: 500 }}>{dinfo.kind === 'soon' ? '⏰ ' : ''}{dinfo.text}</span>}
           </div>
         </div>
+        {!cu && <>
         <div style={{ ...cell, gap: 6 }}>
           <CellText className="cin" value={String(r.days ?? '')} disabled={ro} onCommit={(v) => set('days')(v === '' ? '' : Number(v))}
             style={cin({ width: 52, fontFamily: MONO, fontSize: 12, textAlign: 'right', padding: '0 6px' })} />
@@ -825,10 +890,12 @@ function WorkCard({ r, rank, S, ro, dnd, canDrag, first, last, dragging, over, c
             {PRIO.map((o) => <option key={o} value={o}>{o}</option>)}
           </select>
         </div>
+        </>}
         <div style={cell}>
           <CellText multiline grow className="cin" value={r.remark} onCommit={set('remark')} disabled={ro} placeholder="備註"
             style={cin({ height: 'auto', minHeight: 30, padding: '5px 8px', lineHeight: 1.45, resize: 'none', overflow: 'hidden', color: V.ink2 })} />
         </div>
+        {!cu && <>
         <div style={{ ...cell, padding: '4px 6px' }}>
           <button className="logcell" onClick={onLogs} title={logs.length ? '查看／新增進度紀錄' : '新增進度紀錄'}
             style={{ width: '100%', minHeight: 30, textAlign: 'left', border: `1px solid ${lastLog ? V.line : 'transparent'}`, background: lastLog ? V.tint : 'transparent', borderRadius: 6, padding: '4px 8px', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 2, color: V.ink2 }}>
@@ -869,9 +936,11 @@ function WorkCard({ r, rank, S, ro, dnd, canDrag, first, last, dragging, over, c
           <span>{r.updated || '—'}</span>
           {r.updatedBy && <span style={{ fontFamily: 'inherit', fontSize: 10.5, color: V.faint, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.updatedBy}</span>}
         </div>
-        <div style={{ display: 'grid', placeItems: 'center' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+          {!ro && <TabMove S={S} cur={r.customer} onMove={(t) => S.moveRowTab(r.id, t).then(() => S.say(`已移到「${tabName(S, t)}」`))} />}
           <RowDelete disabled={ro} onDelete={() => S.del(r.id)} />
         </div>
+        </>}
       </div>
       {over === 'after' && <div style={{ ...line, bottom: -5 }} />}
     </div>
@@ -1250,6 +1319,86 @@ function HintBar({ children }) {
   return <div style={{ flex: 'none', padding: '7px 24px', fontSize: 12, lineHeight: 1.5, color: V.muted, background: V.tint, borderBottom: `1px solid ${V.line}` }}>ⓘ {children}</div>;
 }
 
+/* ============================================================
+   A6：客戶分頁（工程清單、生產排程共用）
+   ============================================================ */
+const NO_TAB = '__none__';   // 不屬於任何看得到的分頁（舊版網頁新增的、或分頁被刪掉）
+// 只取目前分頁的資料；新增時自動帶入目前分頁
+function scopeStore(S, tab, part) {
+  if (!tab) return S;
+  const known = new Set(S.customers.map((c) => c.id));
+  const inTab = (x) => (tab === NO_TAB ? !known.has(x.customer) : x.customer === tab);
+  const val = tab === NO_TAB ? '' : tab;
+  const o = { ...S, tab };
+  if (part === 'rows') { o.rows = S.rows.filter(inTab); o.add = (extra) => S.add({ customer: val, ...extra }); }
+  if (part === 'plans') o.plans = S.plans.filter(inTab);
+  o.addPlan = (m, copy, extra) => S.addPlan(m, copy, { customer: copy && copy.customer ? copy.customer : val, ...extra });
+  return o;
+}
+const tabName = (S, id) => (S.customers.find((c) => c.id === id) || {}).name || '未分類';
+function TabMove({ S, cur, onMove, disabled }) {
+  const others = S.customers.filter((c) => c.id !== cur);
+  if (!others.length) return null;
+  return (
+    <select value="" disabled={disabled} title="移到其他分頁" onChange={(e) => e.target.value && onMove(e.target.value)}
+      style={{ width: 22, height: 22, padding: 0, border: 'none', background: 'transparent', color: V.faint, cursor: disabled ? 'default' : 'pointer', fontSize: 12, appearance: 'none', WebkitAppearance: 'none', textAlign: 'center' }}>
+      <option value="">⇄</option>
+      <option value="" disabled>移到其他分頁：</option>
+      {others.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+    </select>
+  );
+}
+const tabBtn = (on) => ({ height: 30, padding: '0 12px', borderRadius: 7, cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, border: `1px solid ${on ? V.btnBg : V.line2}`, background: on ? V.btnBg : V.surface, color: on ? V.btnFg : V.ink2, fontWeight: on ? 600 : 400 });
+function TabBar({ S, tab, setTab, keys, count }) {
+  const [adding, setAdding] = useState(false), [nv, setNv] = useState(''), [renaming, setRenaming] = useState(false);
+  const admin = S.canAdmin;
+  const cur = S.customers.find((c) => c.id === tab);
+  const add = async () => { const id = await S.addTab(nv); setNv(''); setAdding(false); if (id) setTab(id); };
+  const mini = { ...FSEL, height: 26, padding: '0 7px', fontSize: 12 };
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '8px 24px', background: V.surface, borderBottom: `1px solid ${V.line}`, flex: 'none' }}>
+      <span style={{ fontSize: 12, color: V.muted2, marginRight: 4 }}>{S.isCust ? '客戶' : '分頁'}</span>
+      {keys.map((k) => {
+        const c = S.customers.find((x) => x.id === k);
+        const n = count(k);
+        return (
+          <button key={k} onClick={() => setTab(k)} style={{ ...tabBtn(tab === k), ...(k === NO_TAB ? { borderStyle: 'dashed', color: tab === k ? V.btnFg : OVER } : null) }}>
+            {c ? c.name : '⚠ 未分類'}
+            {c && c.internal && <span style={{ fontSize: 10, padding: '0 5px', borderRadius: 4, background: tab === k ? 'rgba(255,255,255,0.2)' : V.tint, color: tab === k ? V.btnFg : V.muted2 }} title="內部分頁：客戶帳號看不到">內部</span>}
+            {!S.isCust && <span style={{ fontFamily: MONO, fontSize: 11, opacity: 0.7 }}>{n}</span>}
+          </button>
+        );
+      })}
+      {admin && cur && !renaming && (
+        <span style={{ display: 'flex', gap: 4, marginLeft: 6 }}>
+          <button onClick={() => setRenaming(true)} title="改名" style={mini}>✎</button>
+          <button onClick={() => S.shiftTab(cur.id, -1)} title="往左移" style={mini}>◀</button>
+          <button onClick={() => S.shiftTab(cur.id, 1)} title="往右移" style={mini}>▶</button>
+          <button onClick={() => S.delTab(cur.id)} title="刪除這個分頁（裡面要沒有資料）" style={{ ...mini, color: V.muted2 }}>刪除</button>
+        </span>
+      )}
+      {admin && cur && renaming && (
+        <form onSubmit={(e) => { e.preventDefault(); S.renameTab(cur.id, e.target.elements.n.value); setRenaming(false); }} style={{ display: 'flex', gap: 4, marginLeft: 6 }}>
+          <input name="n" defaultValue={cur.name} autoFocus maxLength={40} style={{ ...fld, height: 28, width: 140 }} />
+          <button type="submit" style={{ ...darkBtn, height: 28, fontSize: 12 }}>儲存</button>
+          <button type="button" onClick={() => setRenaming(false)} style={{ ...lineBtn, height: 28, fontSize: 12 }}>取消</button>
+        </form>
+      )}
+      {admin && (adding ? (
+        <form onSubmit={(e) => { e.preventDefault(); add(); }} style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
+          <input value={nv} onChange={(e) => setNv(e.target.value)} autoFocus maxLength={40} placeholder="客戶名稱" style={{ ...fld, height: 28, width: 140 }} />
+          <button type="submit" disabled={!nv.trim()} style={{ ...darkBtn, height: 28, fontSize: 12, opacity: nv.trim() ? 1 : 0.5 }}>新增</button>
+          <button type="button" onClick={() => setAdding(false)} style={{ ...lineBtn, height: 28, fontSize: 12 }}>取消</button>
+        </form>
+      ) : <button onClick={() => setAdding(true)} style={{ ...mini, marginLeft: 'auto' }}>＋ 新增分頁</button>)}
+    </div>
+  );
+}
+// 客戶帳號看得到的欄位（工程清單 HEADS／生產排程 PHEADS 的索引）
+const CUST_ENG_COLS = new Set([1, 2, 3, 4, 5, 6, 9]);
+const CUST_PLAN_COLS = new Set([0, 1, 2, 4, 5, 6]);
+const visCols = (S, cols, set) => (S.isCust ? cols.filter((_, i) => set.has(i)) : cols);
+
 function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
   const [sortKey, setSortKey] = useState('order');
   const [sortDir, setSortDir] = useState(1);
@@ -1269,7 +1418,9 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
   const [dragId, setDragId] = useState(null);
   const [over, setOver] = useState(null);
   const scroller = useRef(null);
-  const ro = !S.canEdit, roA = !S.canAdmin;
+  const ro = !S.canEdit, roA = !S.canAdmin, cu = S.isCust;
+  const ownerList = cu ? [...new Set(S.rows.map((r) => r.owner).filter(Boolean))].sort(byName) : S.owners;
+  const vcols = visCols(S, cols, CUST_ENG_COLS);
 
   const q = query.trim().toLowerCase();
   const extra = !!(fOwner || fMachine || fPrio || mine);
@@ -1360,7 +1511,7 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', rowGap: 8, columnGap: 14, padding: '12px 24px', background: V.surface2, borderBottom: `1px solid ${V.line}` }}>
         <div style={{ display: 'flex', gap: 6 }}>
-          {[['list', '列表'], ['gantt', '工程排程']].map(([k, l]) => <button key={k} onClick={() => setEview(k)} style={{ ...lineBtn, background: eview === k ? V.btnBg : V.surface, color: eview === k ? V.btnFg : V.ink, borderColor: eview === k ? V.btnBg : V.line2 }}>{l}</button>)}
+          {!cu && [['list', '列表'], ['gantt', '工程排程']].map(([k, l]) => <button key={k} onClick={() => setEview(k)} style={{ ...lineBtn, background: eview === k ? V.btnBg : V.surface, color: eview === k ? V.btnFg : V.ink, borderColor: eview === k ? V.btnBg : V.line2 }}>{l}</button>)}
         </div>
         <span style={{ fontFamily: MONO, fontSize: 12, color: V.muted2, display: eview === 'list' ? undefined : 'none' }}>{list.length} / {S.rows.length} 筆</span>
         <div style={{ display: eview === 'list' ? 'flex' : 'none', gap: 6 }}>
@@ -1385,6 +1536,7 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
           )}
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
+          {!cu && <>
           <div style={{ position: 'relative' }}>
             <button className="member-btn" onClick={() => setShowMembers((s) => !s)} style={lineBtn}>工程師成員（{S.owners.length}）</button>
             {showMembers && <MemberPanel S={S} roA={roA} team="engineer" onRemove={tryRemoveOwner} onClose={() => setShowMembers(false)} />}
@@ -1419,9 +1571,10 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
               </>
             )}
           </div>
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="搜尋 item / owner / 客戶 / 機台 / remark / 紀錄"
+          </>}
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={cu ? '搜尋 item / owner / 客戶 / 機台 / remark' : '搜尋 item / owner / 客戶 / 機台 / remark / 紀錄'}
             style={{ height: 32, width: 220, border: `1px solid ${V.line2}`, borderRadius: 7, padding: '0 10px', fontSize: 13, background: V.surface }} />
-          <button className="btn-dark" disabled={ro} onClick={addRow} style={{ ...darkBtn, opacity: ro ? 0.5 : 1 }}>＋ 新增一筆</button>
+          {!cu && <button className="btn-dark" disabled={ro} onClick={addRow} style={{ ...darkBtn, opacity: ro ? 0.5 : 1 }}>＋ 新增一筆</button>}
         </div>
       </div>
 
@@ -1433,28 +1586,28 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
           <span style={{ fontSize: 12, color: V.muted2 }}>篩選</span>
           <select value={fOwner} onChange={(e) => setFOwner(e.target.value)} style={{ ...FSEL, ...(fOwner ? FON : null) }}>
             <option value="">全部負責人</option>
-            {S.owners.map((o) => <option key={o} value={o}>{o}</option>)}
+            {ownerList.map((o) => <option key={o} value={o}>{o}</option>)}
             <option value="__none__">（未指派）</option>
             {goneN > 0 && <option value="__gone__">⚠ 負責人已不在清單（{goneN}）</option>}
           </select>
-          <button onClick={() => setMine((v) => !v)} disabled={!S.me} title={S.me ? `只看 ${S.me} 負責的` : '請先在右上角選擇「我是」'} style={{ ...FSEL, ...(mine ? FON : null), opacity: S.me ? 1 : 0.5 }}>只看我的</button>
+          {!cu && <button onClick={() => setMine((v) => !v)} disabled={!S.me} title={S.me ? `只看 ${S.me} 負責的` : '請先在右上角選擇「我是」'} style={{ ...FSEL, ...(mine ? FON : null), opacity: S.me ? 1 : 0.5 }}>只看我的</button>}
           <select value={fMachine} onChange={(e) => setFMachine(e.target.value)} style={{ ...FSEL, ...(fMachine ? FON : null) }}>
             <option value="">全部機台</option>
             {[...new Set([...S.machines, ...machines])].sort(byName).map((m) => <option key={m} value={m}>{m}</option>)}
             <option value="__none__">（未指定機台）</option>
           </select>
-          <select value={fPrio} onChange={(e) => setFPrio(e.target.value)} style={{ ...FSEL, ...(fPrio ? FON : null) }}>
+          {!cu && <select value={fPrio} onChange={(e) => setFPrio(e.target.value)} style={{ ...FSEL, ...(fPrio ? FON : null) }}>
             <option value="">全部優先度</option>
             {PRIO.map((o) => <option key={o} value={o}>{o}</option>)}
-          </select>
+          </select>}
           {extra && <button onClick={clearExtra} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 12, color: V.muted2 }}>清除篩選</button>}
-          {goneN > 0 && (
+          {!cu && goneN > 0 && (
             <button onClick={() => setFOwner(fOwner === '__gone__' ? '' : '__gone__')} title="這些工作的負責人帳號已停用或刪除（或已從成員清單移除），請改派" style={{ border: `1px solid oklch(0.85 0.06 25)`, background: fOwner === '__gone__' ? OVER : 'oklch(0.97 0.02 25)', color: fOwner === '__gone__' ? '#fff' : OVER, borderRadius: 7, height: 30, padding: '0 10px', fontSize: 12, cursor: 'pointer', marginLeft: 6 }}>
               ⚠ {goneN} 筆工作的負責人已不在清單{fOwner === '__gone__' ? '（顯示中，點一下取消）' : '，點一下只看這些'}
             </button>
           )}
-          {clashByRow.size > 0 && <span style={{ fontSize: 12, color: CLASH, marginLeft: 6 }} title="工程項目的機台與日期，和機台生產排程重疊">⚠ {clashByRow.size} 筆工程項目與生產排程撞機台</span>}
-          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+          {!cu && clashByRow.size > 0 && <span style={{ fontSize: 12, color: CLASH, marginLeft: 6 }} title="工程項目的機台與日期，和機台生產排程重疊">⚠ {clashByRow.size} 筆工程項目與生產排程撞機台</span>}
+          {!cu && <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
             <div style={{ position: 'relative' }}>
               <button onClick={() => setShowExport((v) => !v)} style={FSEL}>匯出 CSV ▾</button>
               {showExport && (
@@ -1469,7 +1622,7 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
               )}
             </div>
             <button disabled={!S.canEdit && !S.canPlan} onClick={() => setImporting(true)} title="從 Excel 複製多列後貼上" style={{ ...FSEL, opacity: !S.canEdit && !S.canPlan ? 0.5 : 1 }}>從 Excel 貼上匯入</button>
-          </div>
+          </div>}
         </div>
       )}
       {eview === 'gantt' && (
@@ -1479,9 +1632,9 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
       )}
       {eview === 'list' && !canDrag && !ro && S.rows.length > 1 && <HintBar>目前是排序／篩選檢視，無法調整順序。把排序改成「自訂順序」並清除篩選與搜尋後，就能拖曳每列左側的 ⋮⋮ 換位置。</HintBar>}
       <div ref={scroller} style={{ flex: 1, overflow: 'auto', padding: '18px 24px 40px', display: eview === 'list' ? undefined : 'none' }}>
-        <div style={{ width: cols.reduce((a, b) => a + b, 0) + 2, display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: gridOf(cols), position: 'sticky', top: 0, zIndex: 6, background: V.head, border: `1px solid ${V.line3}`, borderRadius: 8, boxShadow: `0 -18px 0 ${V.bg}` }}>
-            {HEADS.map(([en, zh], i) => (
+        <div style={{ width: vcols.reduce((a, b) => a + b, 0) + 2, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: gridOf(vcols), position: 'sticky', top: 0, zIndex: 6, background: V.head, border: `1px solid ${V.line3}`, borderRadius: 8, boxShadow: `0 -18px 0 ${V.bg}` }}>
+            {HEADS.map(([en, zh], i) => cu && !CUST_ENG_COLS.has(i) ? null : (
               <div key={i} style={{ position: 'relative', padding: '8px 10px', fontSize: 12, fontWeight: 500, color: V.ink2, display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', overflow: 'hidden' }}>
                 <span>{en}</span><span style={{ fontSize: 10, color: V.faint }}>{zh}</span>
                 {i > 0 && i < HEADS.length - 1 && <div className="colgrip" title="左右拖曳調整寬度（連點兩下還原）" onPointerDown={(e) => startResize(i, e)} onDoubleClick={() => resetCol(i)} />}
@@ -1493,7 +1646,7 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
               cols={cols} first={i === 0} last={i === list.length - 1} dragging={dragId === r.id}
               over={over && over.id === r.id ? over.pos : null} logs={logsByRow.get(r.id) || []} onLogs={() => openLogs(r.id)} clash={clashByRow.get(r.id)} />
           ))}
-          {list.length === 0 && <div style={{ padding: 40, textAlign: 'center', fontSize: 13, color: V.muted2, background: V.surface, border: `1px dashed ${V.line3}`, borderRadius: 10 }}>{S.rows.length === 0 ? '還沒有任何工作，按「＋ 新增一筆」開始。' : '沒有符合條件的資料'}</div>}
+          {list.length === 0 && <div style={{ padding: 40, textAlign: 'center', fontSize: 13, color: V.muted2, background: V.surface, border: `1px dashed ${V.line3}`, borderRadius: 10 }}>{S.rows.length === 0 ? (cu ? '目前沒有資料。' : '還沒有任何工作，按「＋ 新增一筆」開始。') : '沒有符合條件的資料'}</div>}
           {dragId && lastItem && (
             <div onDragOver={(e) => { if (canDrag) { e.preventDefault(); setOver({ id: lastItem.id, pos: 'after' }); } }} onDrop={(e) => dnd.drop(e, lastItem)} style={{ height: 36 }} />
           )}
@@ -1711,12 +1864,12 @@ function Gantt({ D, picked, setPicked }) {
   const gStart = R.lo, nDays = R.n;
   const inRange = (r) => !r.dueD || !!clip(r.startD, r.dueD, R);
   const gDays = Array.from({ length: nDays }, (_, i) => {
-    const d = addD(gStart, i); const t = diff(d, today) === 0; const we = d.getDay() === 0 || d.getDay() === 6;
-    return { day: d.getDate(), wd: t ? '今天' : WD[d.getDay()], month: i === 0 || d.getDate() === 1 ? d.getMonth() + 1 + '月' : '', fg: t ? 'var(--accent)' : we ? V.faint : V.ink2, weight: t ? 700 : 400, headBg: t ? V.todayHead : 'transparent' };
+    const d = addD(gStart, i); const t = diff(d, today) === 0; const we = isOff(d), hn = holName(d);
+    return { day: d.getDate(), wd: t ? '今天' : hn ? hn.slice(0, 2) : WD[d.getDay()], tip: hn ? `${ymd(d)} ${hn}` : '', month: i === 0 || d.getDate() === 1 ? d.getMonth() + 1 + '月' : '', fg: t ? 'var(--accent)' : we ? V.holFg : V.ink2, mfg: we && !t ? V.holFg : V.muted2, weight: t || hn ? 700 : 400, headBg: t ? V.todayHead : we ? V.holHead : 'transparent' };
   });
   const gBg = Array.from({ length: nDays }, (_, i) => {
-    const d = addD(gStart, i); const t = diff(d, today) === 0; const we = d.getDay() === 0 || d.getDay() === 6;
-    return { col: i + 2, bg: t ? V.todayBg : we ? V.tint : 'transparent' };
+    const d = addD(gStart, i); const t = diff(d, today) === 0; const we = isOff(d);
+    return { col: i + 2, bg: t ? V.todayBg : we ? V.holBody : 'transparent' };
   });
   const mkeys = [...new Set(rows.map((r) => r.machine || '').filter(Boolean))].sort(byName).concat(rows.some((r) => !r.machine) ? [''] : []);
   const keys = by === 'owner' ? names : mkeys;
@@ -1771,10 +1924,10 @@ function Gantt({ D, picked, setPicked }) {
         <div style={{ display: 'grid', gridTemplateColumns: gCols, position: 'sticky', top: 0, zIndex: 3, background: V.head, borderBottom: `1px solid ${V.line3}`, width: 'max-content', minWidth: '100%' }}>
           <div style={{ position: 'sticky', left: 0, zIndex: 4, background: V.head, padding: '8px 14px', fontSize: 12, color: V.muted, borderRight: `1px solid ${V.line3}`, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 4, alignItems: 'flex-start' }}><span>工作項目 / 機台</span>{focusHint(F)}</div>
           {gDays.map((d, i) => (
-            <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '4px 0 6px', borderRight: `1px solid ${V.line}`, background: d.headBg }}>
-              <span style={{ fontSize: 10, color: V.muted2, height: 13 }}>{d.month}</span>
+            <div key={i} title={d.tip} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '4px 0 6px', borderRight: `1px solid ${V.line}`, background: d.headBg }}>
+              <span style={{ fontSize: 10, color: d.mfg, height: 13 }}>{d.month}</span>
               <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: d.weight, color: d.fg }}>{d.day}</span>
-              <span style={{ fontSize: 10, color: d.fg }}>{d.wd}</span>
+              <span style={{ fontSize: 10, color: d.fg, whiteSpace: 'nowrap' }}>{d.wd}</span>
             </div>
           ))}
         </div>
@@ -1893,9 +2046,10 @@ function PlanRow({ p, S, ro, clash, machineOpts, cols }) {
   const days = p.start && p.end ? diff(s2d(p.end), s2d(p.start)) + 1 : '';
   const bad = p.start && p.end && days < 1;
   const opts = [...new Set([...machineOpts, ...(p.machine ? [p.machine] : [])])].sort(byName);
+  const cu = S.isCust;
   const dateStyle = (c) => pin({ fontFamily: MONO, fontSize: 12, padding: '0 4px', color: c || 'inherit' });
   return (
-    <div className="wcard" style={{ display: 'grid', gridTemplateColumns: gridOf(cols), alignItems: 'stretch', background: V.surface, border: `1px solid ${clash ? 'oklch(0.7 0.12 50)' : V.line2}`, borderRadius: 8, minHeight: 46, boxShadow: p.hw ? 'inset 4px 0 0 oklch(0.62 0.15 50)' : undefined }}>
+    <div className="wcard" style={{ display: 'grid', gridTemplateColumns: gridOf(visCols(S, cols, CUST_PLAN_COLS)), alignItems: 'stretch', background: V.surface, border: `1px solid ${clash && !cu ? 'oklch(0.7 0.12 50)' : V.line2}`, borderRadius: 8, minHeight: 46, boxShadow: p.hw && !cu ? 'inset 4px 0 0 oklch(0.62 0.15 50)' : undefined }}>
       <div style={pCell}>
         <select className="cin" value={p.machine || ''} disabled={ro} onChange={(e) => set('machine')(e.target.value)} style={pin({ cursor: ro ? 'default' : 'pointer', fontFamily: MONO, fontSize: 12, fontWeight: 600 })}>
           <option value="">—</option>
@@ -1904,19 +2058,22 @@ function PlanRow({ p, S, ro, clash, machineOpts, cols }) {
       </div>
       <div style={pCell}><CellText multiline grow enterBlur className="cin" value={p.group} onCommit={set('group')} disabled={ro} placeholder="Group" style={pin({ height: 'auto', minHeight: 30, padding: '5px 8px', lineHeight: 1.45, resize: 'none', overflow: 'hidden', wordBreak: 'break-word' })} /></div>
       <div style={pCell}><CellText multiline grow enterBlur className="cin" value={p.product} onCommit={set('product')} disabled={ro} placeholder="產品名稱" style={pin({ fontWeight: 600, height: 'auto', minHeight: 30, padding: '5px 8px', lineHeight: 1.45, resize: 'none', overflow: 'hidden', wordBreak: 'break-word' })} /></div>
-      <div style={{ ...pCell, justifyContent: 'center' }}><HwSwitch on={p.hw} disabled={ro} onChange={set('hw')} /></div>
+      {!cu && <div style={{ ...pCell, justifyContent: 'center' }}><HwSwitch on={p.hw} disabled={ro} onChange={set('hw')} /></div>}
       <div style={pCell}><input className="cin" type="date" value={p.start || ''} disabled={ro} onChange={(e) => set('start')(e.target.value)} style={dateStyle()} /></div>
       <div style={pCell}><input className="cin" type="date" value={p.end || ''} disabled={ro} onChange={(e) => set('end')(e.target.value)} style={dateStyle(bad ? 'oklch(0.55 0.17 25)' : null)} /></div>
       <div style={{ ...pCell, fontFamily: MONO, fontSize: 12, color: bad ? 'oklch(0.55 0.17 25)' : V.muted, flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', gap: 1 }}>
         <span>{bad ? '日期有誤' : days}</span>
-        {clash && !bad && <span title="同一台機台有日期重疊的排程" style={{ fontSize: 10, color: 'oklch(0.55 0.13 50)', fontFamily: 'inherit' }}>⚠ 重疊</span>}
+        {clash && !bad && !cu && <span title="同一台機台有日期重疊的排程" style={{ fontSize: 10, color: 'oklch(0.55 0.13 50)', fontFamily: 'inherit' }}>⚠ 重疊</span>}
       </div>
+      {!cu && <>
       <div style={pCell}><CellText multiline grow className="cin" value={p.remark} onCommit={set('remark')} disabled={ro} placeholder="備註" style={pin({ height: 'auto', minHeight: 30, padding: '5px 8px', lineHeight: 1.45, resize: 'none', overflow: 'hidden', color: V.ink2 })} /></div>
       <div style={{ ...pCell, fontFamily: MONO, fontSize: 11, color: V.muted2, flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', gap: 1 }}><span>{p.updated || '—'}</span>{p.updatedBy && <span style={{ fontSize: 10.5, color: V.faint }}>{p.updatedBy}</span>}</div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
         <button className="mv" disabled={ro} onClick={() => S.addPlan('', p)} title="複製一筆（同樣內容，可再改機台或日期）" style={{ ...mvBtn, fontSize: 13, width: 24 }}>⧉</button>
+        {!ro && <TabMove S={S} cur={p.customer} onMove={(t) => S.movePlanTab(p.id, t).then(() => S.say(`已移到「${tabName(S, t)}」`))} />}
         <RowDelete disabled={ro} onDelete={() => S.delPlan(p.id)} />
       </div>
+      </>}
     </div>
   );
 }
@@ -1971,9 +2128,9 @@ function DailyGrid({ groups: allGroups, headLabel, rangeKey }) {
     rows: g.rows.map((r) => ({ ...r, bars: r.bars.map((b) => { const c = clip(b.a, b.b, R); return c && { ...b, a: c.a, b: c.b, cutL: c.cutL, cutR: c.cutR }; }).filter(Boolean), had: r.bars.length }))
       .filter((r) => { const keep = r.bars.length > 0 || r.had === 0; if (!keep) hidden++; return keep; }),
   })).filter((g) => g.rows.length);
-  const days = Array.from({ length: n }, (_, i) => { const d = addD(lo, i); return { d, t: diff(d, today) === 0, we: d.getDay() === 0 || d.getDay() === 6 }; });
+  const days = Array.from({ length: n }, (_, i) => { const d = addD(lo, i); return { d, t: diff(d, today) === 0, we: isOff(d), hn: holName(d) }; });
   const grid = `repeating-linear-gradient(to right, transparent 0, transparent ${DW - 1}px, ${V.line} ${DW - 1}px, ${V.line} ${DW}px)`;
-  const shades = days.map((x, i) => (x.t || x.we) ? <div key={i} style={{ position: 'absolute', left: i * DW, width: DW, top: 0, bottom: 0, background: x.t ? V.todayBg : V.tint }} /> : null);
+  const shades = days.map((x, i) => (x.t || x.we) ? <div key={i} style={{ position: 'absolute', left: i * DW, width: DW, top: 0, bottom: 0, background: x.t ? V.todayBg : V.holBody }} /> : null);
   const lines = `repeating-linear-gradient(to right, transparent 0, transparent ${DW - 1}px, rgba(255,255,255,0.75) ${DW - 1}px, rgba(255,255,255,0.75) ${DW}px)`;
   if (groups.length === 0) return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1990,10 +2147,10 @@ function DailyGrid({ groups: allGroups, headLabel, rangeKey }) {
           <div style={{ width: LW, flex: 'none', position: 'sticky', left: 0, zIndex: 6, background: V.head, padding: '8px 14px', fontSize: 12, color: V.muted, borderRight: `1px solid ${V.line3}`, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', gap: 4, alignItems: 'flex-start' }}><span>{headLabel}</span>{focusHint(F)}</div>
           <div style={{ display: 'flex', width: W }}>
             {days.map((x, i) => (
-              <div key={i} style={{ width: DW, flex: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '4px 0 6px', borderRight: `1px solid ${V.line}`, background: x.t ? V.todayHead : 'transparent' }}>
-                <span style={{ fontSize: 10, color: V.muted2, height: 13, whiteSpace: 'nowrap' }}>{i === 0 || x.d.getDate() === 1 ? x.d.getMonth() + 1 + '月' : ''}</span>
-                <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: x.t ? 700 : 400, color: x.t ? 'var(--accent)' : x.we ? V.faint : V.ink2 }}>{x.d.getDate()}</span>
-                <span style={{ fontSize: 10, color: x.t ? 'var(--accent)' : x.we ? V.faint : V.ink2 }}>{x.t ? '今天' : WD[x.d.getDay()]}</span>
+              <div key={i} title={x.hn ? `${ymd(x.d)} ${x.hn}` : ''} style={{ width: DW, flex: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '4px 0 6px', borderRight: `1px solid ${V.line}`, background: x.t ? V.todayHead : x.we ? V.holHead : 'transparent' }}>
+                <span style={{ fontSize: 10, color: x.we && !x.t ? V.holFg : V.muted2, height: 13, whiteSpace: 'nowrap' }}>{i === 0 || x.d.getDate() === 1 ? x.d.getMonth() + 1 + '月' : ''}</span>
+                <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: x.t || x.hn ? 700 : 400, color: x.t ? 'var(--accent)' : x.we ? V.holFg : V.ink2 }}>{x.d.getDate()}</span>
+                <span style={{ fontSize: 10, whiteSpace: 'nowrap', color: x.t ? 'var(--accent)' : x.we ? V.holFg : V.ink2 }}>{x.t ? '今天' : x.hn ? x.hn.slice(0, 2) : WD[x.d.getDay()]}</span>
               </div>
             ))}
           </div>
@@ -2080,7 +2237,7 @@ function ComboPage({ S, D }) {
 
 function PlanPage({ S }) {
   const [showPM, setShowPM] = useState(false);
-  const ro = !S.canPlan;
+  const ro = !S.canPlan, cu = S.isCust;
   const [mode, setMode] = useState('list');
   const [mf, setMf] = useState('');
   const [q, setQ] = useState('');
@@ -2093,34 +2250,35 @@ function PlanPage({ S }) {
   const ql = q.trim().toLowerCase();
   const list = sorted.filter((p) => (!mf || p.machine === mf) && (!hwOnly || p.hw) && (!ql || [p.machine, p.group, p.product, p.remark].some((x) => (x || '').toLowerCase().includes(ql))));
   const [pcols, startPResize, resetPCol] = useCols('plan.cols.v1', PGRID, PGMIN);
-  const total = pcols.reduce((a, b) => a + b, 0) + 2;
+  const vp = visCols(S, pcols, CUST_PLAN_COLS);
+  const total = vp.reduce((a, b) => a + b, 0) + 2;
   const tabBtn = (k, label) => <button key={k} onClick={() => setMode(k)} style={{ ...lineBtn, background: mode === k ? V.btnBg : V.surface, color: mode === k ? V.btnFg : V.ink, borderColor: mode === k ? V.btnBg : V.line2 }}>{label}</button>;
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 24px', borderBottom: `1px solid ${V.line}`, flex: 'none' }}>
         <span style={{ fontFamily: MONO, fontSize: 12, color: V.muted2 }}>{list.length} / {S.plans.length} 筆</span>
-        {clashIds.size > 0 && <span style={{ fontSize: 12, color: 'oklch(0.55 0.13 50)' }}>⚠ {clashIds.size} 筆排程日期重疊</span>}
+        {!cu && clashIds.size > 0 && <span style={{ fontSize: 12, color: 'oklch(0.55 0.13 50)' }}>⚠ {clashIds.size} 筆排程日期重疊</span>}
         <div style={{ display: 'flex', gap: 6, marginLeft: 8 }}>{tabBtn('list', '列表')}{tabBtn('time', '時程圖')}</div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ position: 'relative' }}>
+          {!cu && <div style={{ position: 'relative' }}>
             <button className="member-btn" onClick={() => setShowPM((v) => !v)} style={lineBtn}>Planner 成員（{S.planners.length}）</button>
             {showPM && <MemberPanel S={S} roA={!S.canAdmin} team="planner" onRemove={(n) => S.delOwnerOnly(n)} onClose={() => setShowPM(false)} />}
-          </div>
-          <button onClick={() => setHwOnly((v) => !v)} style={{ ...lineBtn, background: hwOnly ? 'oklch(0.62 0.15 50)' : V.surface, color: hwOnly ? '#fff' : V.ink, borderColor: hwOnly ? 'oklch(0.62 0.15 50)' : V.line2 }}>只看 HW 相關（{S.plans.filter((p) => p.hw).length}）</button>
+          </div>}
+          {!cu && <button onClick={() => setHwOnly((v) => !v)} style={{ ...lineBtn, background: hwOnly ? 'oklch(0.62 0.15 50)' : V.surface, color: hwOnly ? '#fff' : V.ink, borderColor: hwOnly ? 'oklch(0.62 0.15 50)' : V.line2 }}>只看 HW 相關（{S.plans.filter((p) => p.hw).length}）</button>}
           <select value={mf} onChange={(e) => setMf(e.target.value)} style={{ height: 32, border: `1px solid ${V.line2}`, borderRadius: 7, padding: '0 8px', fontSize: 13, background: V.surface }}>
             <option value="">全部機台</option>
             {used.map((m) => <option key={m} value={m}>{m}</option>)}
           </select>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜尋 機台 / group / 產品 / 備註" style={{ height: 32, width: 240, border: `1px solid ${V.line2}`, borderRadius: 7, padding: '0 10px', fontSize: 13, background: V.surface }} />
-          <button className="btn-dark" disabled={ro} onClick={() => S.addPlan(mf)} style={{ ...darkBtn, opacity: ro ? 0.5 : 1 }}>＋ 新增排程</button>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={cu ? '搜尋 機台 / group / 產品' : '搜尋 機台 / group / 產品 / 備註'} style={{ height: 32, width: 240, border: `1px solid ${V.line2}`, borderRadius: 7, padding: '0 10px', fontSize: 13, background: V.surface }} />
+          {!cu && <button className="btn-dark" disabled={ro} onClick={() => S.addPlan(mf)} style={{ ...darkBtn, opacity: ro ? 0.5 : 1 }}>＋ 新增排程</button>}
         </div>
       </div>
-      {S.machines.length === 0 && <HintBar>機台名稱來自「工程清單」頁的「機台清單」，請先在那裡建立機台。</HintBar>}
+      {!cu && S.machines.length === 0 && <HintBar>機台名稱來自「工程清單」頁的「機台清單」，請先在那裡建立機台。</HintBar>}
       <div style={{ flex: 1, overflow: 'auto', padding: '18px 24px 40px' }}>
         {mode === 'time' ? <PlanTimeline plans={list} machineNames={used} /> : (
           <div style={{ width: total, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: gridOf(pcols), position: 'sticky', top: 0, zIndex: 6, background: V.head, border: `1px solid ${V.line3}`, borderRadius: 8, boxShadow: `0 -18px 0 ${V.bg}` }}>
-              {PHEADS.map(([en, zh], i) => (
+            <div style={{ display: 'grid', gridTemplateColumns: gridOf(vp), position: 'sticky', top: 0, zIndex: 6, background: V.head, border: `1px solid ${V.line3}`, borderRadius: 8, boxShadow: `0 -18px 0 ${V.bg}` }}>
+              {PHEADS.map(([en, zh], i) => cu && !CUST_PLAN_COLS.has(i) ? null : (
                 <div key={i} style={{ position: 'relative', padding: '8px 10px', fontSize: 12, fontWeight: 500, color: V.ink2, display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', overflow: 'hidden' }}>
                   <span>{en}</span><span style={{ fontSize: 10, color: V.faint }}>{zh}</span>
                   {i < PHEADS.length - 1 && <div className="colgrip" title="左右拖曳調整寬度（連點兩下還原）" onPointerDown={(e) => startPResize(i, e)} onDoubleClick={() => resetPCol(i)} />}
@@ -2128,7 +2286,7 @@ function PlanPage({ S }) {
               ))}
             </div>
             {list.map((p) => <PlanRow key={p.id} p={p} S={S} ro={ro} clash={clashIds.has(p.id)} machineOpts={machineOpts} cols={pcols} />)}
-            {list.length === 0 && <div style={{ padding: 40, textAlign: 'center', fontSize: 13, color: V.muted2, background: V.surface, border: `1px dashed ${V.line3}`, borderRadius: 10 }}>{S.plans.length === 0 ? '還沒有任何排程，按「＋ 新增排程」開始。' : '沒有符合條件的資料'}</div>}
+            {list.length === 0 && <div style={{ padding: 40, textAlign: 'center', fontSize: 13, color: V.muted2, background: V.surface, border: `1px dashed ${V.line3}`, borderRadius: 10 }}>{S.plans.length === 0 ? (cu ? '目前沒有資料。' : '還沒有任何排程，按「＋ 新增排程」開始。') : '沒有符合條件的資料'}</div>}
             {!ro && <div className="add-row" onClick={() => S.addPlan(mf)} style={{ padding: '10px 14px', fontSize: 13, color: V.muted2, cursor: 'pointer', borderRadius: 8, border: `1px dashed ${V.line3}`, textAlign: 'center' }}>＋ 新增排程</div>}
           </div>
         )}
@@ -2251,7 +2409,7 @@ function SettingsMenu({ S }) {
           <div style={{ position: 'absolute', top: 34, right: 0, width: 280, zIndex: 30, background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.15)', padding: 12 }}>
             <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4 }}>預計天數怎麼算（全體共用{S.canAdmin ? '' : '，只有管理員能改'}）</div>
             {opt(false, '日曆天', '含週末，從截止日往回推')}
-            {opt(true, '只算工作天', '跳過週六、週日，從截止日往回推')}
+            {opt(true, '只算工作天', '跳過週六、週日與國定假日（補班日照算），從截止日往回推')}
             <div style={{ fontSize: 12, fontWeight: 500, margin: '10px 0 6px', paddingTop: 10, borderTop: `1px solid ${V.line}` }}>外觀（只影響這台電腦）</div>
             <div style={{ display: 'flex', gap: 6 }}>
               {THEMES.map(([k, l]) => <button key={k} onClick={() => setTheme(k)} style={{ ...FSEL, flex: 1, height: 28, ...(theme === k ? FON : null) }}>{l}</button>)}
@@ -2266,8 +2424,8 @@ function SettingsMenu({ S }) {
 /* ============================================================
    帳號：登入／註冊／待核准／帳號管理（Supabase Auth）
    ============================================================ */
-const ROLE_LABEL = { viewer: '只能看', engineer: '工程師', planner: 'Planner', admin: '管理員' };
-const ROLE_HINT = { viewer: '全部只能看', engineer: '改工程清單、進度紀錄；生產排程只能看', planner: '改機台生產排程；工程清單只能看', admin: '全部都能改，含帳號、成員、機台、設定' };
+const ROLE_LABEL = { viewer: '只能看', engineer: '工程師', planner: 'Planner', admin: '管理員', customer: '客戶' };
+const ROLE_HINT = { viewer: '全部只能看', engineer: '改工程清單、進度紀錄；生產排程只能看', planner: '改機台生產排程；工程清單只能看', admin: '全部都能改，含帳號、成員、機台、設定', customer: '外部客戶：只看得到指定分頁的工程清單與生產排程（部分欄位），不能修改' };
 const authErr = (e) => {
   const m = (e && e.message) || '';
   if (/Invalid login credentials/i.test(m)) return 'email 或密碼錯誤。';
@@ -2369,6 +2527,50 @@ const dbErr = (e) => {
   if (/只有最高管理員/.test(m)) return '只有最高管理員可以刪除帳號。';
   return m || '未知原因';
 };
+function TabsCell({ p, S, upd: save }) {
+  const [open, setOpen] = useState(false);
+  // 先在畫面上反映勾選，資料庫存好後再以伺服器資料為準
+  const [tl, setTl] = useState(p.tabs);
+  useEffect(() => setTl(p.tabs), [JSON.stringify(p.tabs)]);
+  const upd = (patch) => { if ('tabs' in patch) setTl(patch.tabs); return save(patch); };
+  const ext = S.customers.filter((c) => !c.internal);
+  if (p.role === 'admin') return <span style={{ fontSize: 12, color: V.muted2 }}>全部（管理員）</span>;
+  if (p.role === 'customer') {
+    const v = (p.tabs || [])[0] || '';
+    return (
+      <select value={v} onChange={(e) => upd({ tabs: e.target.value ? [e.target.value] : null })} style={{ ...FSEL, height: 30, ...(v ? null : { borderColor: OVER, color: OVER }) }}>
+        <option value="">（請指定客戶分頁）</option>
+        {ext.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+      </select>
+    );
+  }
+  const all = !tl;
+  const sel = new Set(tl || []);
+  const label = all ? '全部分頁' : S.customers.filter((c) => sel.has(c.id)).map((c) => c.name).join('、') || '（沒有任何分頁）';
+  const toggle = (id) => { const n = new Set(sel); n.has(id) ? n.delete(id) : n.add(id); upd({ tabs: [...n] }); };
+  return (
+    <span style={{ position: 'relative', minWidth: 0 }}>
+      <button onClick={() => setOpen((o) => !o)} title={label} style={{ ...FSEL, height: 30, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...(all ? null : { borderColor: 'var(--accent)' }), ...(tl && !tl.length ? { color: OVER } : null) }}>{label} ▾</button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
+          <div style={{ position: 'absolute', top: 34, left: 0, width: 220, zIndex: 10, background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 8, boxShadow: '0 12px 32px rgba(0,0,0,0.15)', padding: 8, display: 'flex', flexDirection: 'column', gap: 4, fontSize: 13 }}>
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '4px 6px', fontWeight: 500 }}>
+              <input type="checkbox" checked={all} onChange={(e) => upd({ tabs: e.target.checked ? null : S.customers.map((c) => c.id) })} />全部分頁（含之後新增的）
+            </label>
+            <div style={{ borderTop: `1px solid ${V.line}`, margin: '2px 0' }} />
+            {S.customers.map((c) => (
+              <label key={c.id} style={{ display: 'flex', gap: 6, alignItems: 'center', padding: '3px 6px', color: all ? V.faint : V.ink }}>
+                <input type="checkbox" disabled={all} checked={all || sel.has(c.id)} onChange={() => toggle(c.id)} />{c.name}{c.internal && <span style={{ fontSize: 10.5, color: V.muted2 }}>（內部）</span>}
+              </label>
+            ))}
+            <div style={{ fontSize: 11, color: V.muted2, padding: '4px 6px', lineHeight: 1.5 }}>只看得到、也只能修改勾選的分頁。</div>
+          </div>
+        </>
+      )}
+    </span>
+  );
+}
 function AccountRow({ p, S, sb, isMe, canDelete, onErr, reload, G }) {
   const [ask, setAsk] = useState(false), [busy, setBusy] = useState(false);
   const upd = async (patch) => {
@@ -2406,11 +2608,16 @@ function AccountRow({ p, S, sb, isMe, canDelete, onErr, reload, G }) {
         </span>
         <span style={{ fontSize: 12, color: V.muted, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.email}{isMe ? '（你）' : ''}</span>
         <span style={{ justifySelf: 'start', fontSize: 11.5, padding: '2px 9px', borderRadius: 10, background: tBg, color: tFg, fontWeight: 500 }}>{STATUS_LABEL[p.status] || p.status}</span>
-        <select value={p.role} disabled={p.is_owner} onChange={(e) => upd({ role: e.target.value })} title={p.status === 'pending' ? '核准時會給這個權限' : ''} style={{ ...FSEL, height: 30 }}>
+        <select value={p.role} disabled={p.is_owner} onChange={(e) => {
+          const r = e.target.value, ext = S.customers.find((c) => !c.internal);
+          if (r === 'customer') upd({ role: r, tabs: p.role === 'customer' ? p.tabs : ext ? [ext.id] : null });
+          else upd({ role: r, ...(p.role === 'customer' ? { tabs: null } : null) });
+        }} title={p.status === 'pending' ? '核准時會給這個權限' : ''} style={{ ...FSEL, height: 30 }}>
           {Object.entries(ROLE_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
           {!ROLE_LABEL[p.role] && <option value={p.role}>{p.role}</option>}
         </select>
-        {m ? (
+        <TabsCell p={p} S={S} upd={upd} />
+        {p.role === 'customer' ? <span style={{ fontSize: 12, color: V.muted2 }}>客戶帳號：不加入成員清單</span> : m ? (
           <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'oklch(0.45 0.1 155)', minWidth: 0 }}>
             <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>✓ {m.name}<span style={{ color: V.muted2, marginLeft: 6 }}>{TEAM_LABEL[m.team] || ''}組</span></span>
             {free.length > 0 && (
@@ -2447,7 +2654,9 @@ const normAllow = (s) => { let x = String(s || '').trim().toLowerCase(); if (x &
 const panelHead = { padding: '10px 16px', borderBottom: `1px solid ${V.line}`, background: V.tint, display: 'flex', alignItems: 'baseline', gap: 10 };
 function AllowListPanel({ sb, S, oldDb }) {
   const owner = !!S.profile.is_owner;
-  const [list, setList] = useState(null), [v, setV] = useState(''), [note, setNote] = useState('');
+  const [list, setList] = useState(null), [v, setV] = useState(''), [note, setNote] = useState(''), [cust, setCust] = useState('');
+  const ext = S.customers.filter((c) => !c.internal);
+  const custName = (id) => (ext.find((c) => c.id === id) || {}).name;
   const [err, setErr] = useState(''), [busy, setBusy] = useState(false), [askLast, setAskLast] = useState(null);
   const load = () => sb.from('signup_allow').select('*').order('created_at').then(({ data, error }) => setList(error ? { error } : data));
   useEffect(() => { if (!oldDb) load(); }, [oldDb]);
@@ -2458,10 +2667,15 @@ function AllowListPanel({ sb, S, oldDb }) {
     if (!ALLOW_RE.test(p)) { setErr('格式不對：網域請填「@公司.com」，單一信箱請填完整 email。'); return; }
     if (Array.isArray(list) && list.some((x) => x.pattern === p)) { setErr(`「${p}」已經在名單內。`); return; }
     setBusy(true);
-    const { error } = await sb.from('signup_allow').insert({ pattern: p, note: note.trim() });
+    const { error } = await sb.from('signup_allow').insert({ pattern: p, note: note.trim(), ...(cust ? { customer_id: cust } : null) });
     setBusy(false);
     if (error) setErr('新增失敗：' + (error.code === '42501' ? '只有最高管理員可以修改名單。' : error.message));
-    else { setV(''); setNote(''); load(); }
+    else { setV(''); setNote(''); setCust(''); load(); }
+  };
+  const setMap = async (p, cid) => {
+    setErr('');
+    const { error } = await sb.from('signup_allow').update({ customer_id: cid || null }).eq('pattern', p);
+    if (error) setErr('修改失敗：' + error.message); else load();
   };
   const del = async (p) => {
     setErr(''); setAskLast(null);
@@ -2474,7 +2688,8 @@ function AllowListPanel({ sb, S, oldDb }) {
       <div style={panelHead}><b style={{ fontSize: 13.5 }}>允許註冊名單</b><span style={{ fontSize: 11.5, color: V.muted2 }}>{owner ? '只有 ★ 最高管理員可以修改' : '只有 ★ 最高管理員可以修改，你只能檢視'}</span></div>
       <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
         <div style={{ fontSize: 12, color: V.muted, lineHeight: 1.7 }}>
-          只有名單內的信箱能註冊新帳號（註冊後仍要核准）。可以填<b>整個網域</b>（<code>@company.com</code>），或只開放給<b>單一信箱</b>（客戶窗口）。已經註冊的帳號不受影響。
+          只有名單內的信箱能註冊新帳號（註冊後仍要核准）。可以填<b>整個網域</b>（<code>@company.com</code>），或只開放給<b>單一信箱</b>（客戶窗口）。已經註冊的帳號不受影響。<br />
+          指定了<b>客戶分頁</b>的，註冊後會自動成為該客戶的<b>客戶帳號</b>（只看得到那一頁）；沒指定的是一般內部帳號。
         </div>
         {oldDb ? <div style={{ fontSize: 12.5, color: SOON.fg }}>資料庫還沒更新，請先執行最新的 schema.sql。</div>
           : list && list.error ? <div style={{ fontSize: 12.5, color: OVER }}>讀取失敗：{list.error.message}</div>
@@ -2483,10 +2698,16 @@ function AllowListPanel({ sb, S, oldDb }) {
             {rows.length === 0 && <div style={{ fontSize: 12.5, padding: '8px 10px', borderRadius: 7, background: SOON.bg, color: SOON.fg }}>名單是空的：<b>任何信箱都能註冊</b>（仍需核准）。</div>}
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {rows.map((x) => (
-                <div key={x.pattern} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.2fr) minmax(0,1fr) auto', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: `1px dashed ${V.line}` }}>
+                <div key={x.pattern} style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1.2fr) 120px minmax(0,1fr) auto', gap: 10, alignItems: 'center', padding: '6px 0', borderBottom: `1px dashed ${V.line}` }}>
                   <span style={{ fontFamily: MONO, fontSize: 12.5, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {x.pattern}<span style={{ fontFamily: 'inherit', marginLeft: 8, fontSize: 10.5, padding: '1px 6px', borderRadius: 4, background: V.tint, color: V.muted2 }}>{x.pattern.startsWith('@') ? '網域' : '單一信箱'}</span>
                   </span>
+                  {owner ? (
+                    <select value={x.customer_id || ''} onChange={(e) => setMap(x.pattern, e.target.value)} title="從這裡註冊的人會成為哪種帳號" style={{ ...FSEL, height: 26, fontSize: 11.5, ...(x.customer_id ? { borderColor: 'var(--accent)' } : null) }}>
+                      <option value="">內部帳號</option>
+                      {ext.map((c) => <option key={c.id} value={c.id}>客戶：{c.name}</option>)}
+                    </select>
+                  ) : <span style={{ fontSize: 11.5, color: x.customer_id ? 'var(--accent)' : V.muted2 }}>{x.customer_id ? `客戶：${custName(x.customer_id) || '?'}` : '內部帳號'}</span>}
                   <span style={{ fontSize: 11.5, color: V.muted2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${x.note || ''}${x.created_by ? `\n由 ${x.created_by} 新增` : ''}`}>{x.note}{x.created_by ? `${x.note ? '・' : ''}${x.created_by}` : ''}</span>
                   {owner && (askLast === x.pattern ? (
                     <span style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 11.5, color: OVER }}>
@@ -2503,7 +2724,11 @@ function AllowListPanel({ sb, S, oldDb }) {
             {owner && (
               <form onSubmit={add} style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 <input value={v} onChange={(e) => setV(e.target.value)} placeholder="@customer.com 或 name@customer.com" style={{ ...fld, flex: '1 1 200px', fontFamily: MONO }} />
-                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="備註（例：客戶名稱）" maxLength={60} style={{ ...fld, flex: '1 1 140px' }} />
+                <select value={cust} onChange={(e) => setCust(e.target.value)} title="從這裡註冊的人會成為哪種帳號" style={{ ...FSEL, height: 32 }}>
+                  <option value="">內部帳號</option>
+                  {ext.map((c) => <option key={c.id} value={c.id}>客戶：{c.name}</option>)}
+                </select>
+                <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="備註（例：客戶名稱）" maxLength={60} style={{ ...fld, flex: '1 1 120px' }} />
                 <button type="submit" disabled={busy || !v.trim()} className="btn-dark" style={{ ...darkBtn, opacity: busy || !v.trim() ? 0.5 : 1 }}>加入名單</button>
               </form>
             )}
@@ -2517,7 +2742,7 @@ function AllowListPanel({ sb, S, oldDb }) {
 
 /* ---------- A2：完整備份（管理員匯出、最高管理員還原）---------- */
 const BACKUP_TABLES = [
-  ['eng_items', '工程項目'], ['eng_logs', '進度紀錄'], ['eng_files', '附件連結'], ['prod_plans', '生產排程'],
+  ['customers', '分頁（客戶）'], ['eng_items', '工程項目'], ['eng_logs', '進度紀錄'], ['eng_files', '附件連結'], ['prod_plans', '生產排程'],
   ['members', '團隊成員'], ['machines', '機台'], ['settings', '設定'], ['signup_allow', '允許註冊名單'],
 ];
 async function readAll(sb, table, cols = '*') {
@@ -2535,10 +2760,10 @@ async function makeBackup(sb, S) {
   const tables = {};
   for (const [t] of BACKUP_TABLES) {
     try { tables[t] = await readAll(sb, t); }
-    catch (e) { if (t === 'signup_allow') continue; throw e; }   // 舊版資料庫沒有允許名單
+    catch (e) { if (t === 'signup_allow' || t === 'customers') continue; throw e; }   // 舊版資料庫沒有這些資料表
   }
   let accounts = [];
-  try { accounts = await readAll(sb, 'profiles', 'email,name,role,status,is_owner,created_at'); } catch (e) {}
+  try { accounts = await readAll(sb, 'profiles', 'email,name,role,status,is_owner,tabs,created_at'); } catch (e) {}
   return {
     app: 'team-schedule', schema: v.error ? 1 : v.data, exported_at: stamp(), exported_by: S.me || '',
     note: '登入帳號（accounts）只供參考，還原時不會建立或修改帳號。本檔含客戶資料，請存放在公司內部、不要上傳到公開位置。',
@@ -2588,7 +2813,7 @@ function BackupPanel({ sb, S, oldDb }) {
     } catch (e) { setMsg({ ok: false, text: '還原失敗，資料沒有任何變動：' + ((e && e.message) || '未知原因') }); }
     setBusy('');
   };
-  const now = { eng_items: S.rows.length, eng_logs: S.logs.length, prod_plans: S.plans.length, members: S.members.length, machines: S.machines.length };
+  const now = { customers: S.customers.length, eng_items: S.rows.length, eng_logs: S.logs.length, prod_plans: S.plans.length, members: S.members.length, machines: S.machines.length };
   return (
     <div style={{ ...card, overflow: 'hidden', alignSelf: 'start' }}>
       <div style={panelHead}><b style={{ fontSize: 13.5 }}>備份與還原</b><span style={{ fontSize: 11.5, color: V.muted2 }}>Supabase 免費方案沒有可下載的自動備份，建議每週匯出一次</span></div>
@@ -2638,7 +2863,7 @@ function AccountsPage({ sb, S, profiles, reload, oldDb }) {
   const [err, setErr] = useState('');
   const order = { pending: 0, active: 1, disabled: 2 };
   const sorted = [...profiles].sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3) || (b.is_owner ? 1 : 0) - (a.is_owner ? 1 : 0) || (a.created_at || '').localeCompare(b.created_at || ''));
-  const G = '150px minmax(0,1.3fr) minmax(0,1.2fr) 78px 120px minmax(0,1.3fr) 118px';
+  const G = '150px minmax(0,1.2fr) minmax(0,1.2fr) 78px 110px minmax(0,1.1fr) minmax(0,1.2fr) 118px';
   const cnt = (s) => profiles.filter((p) => p.status === s).length;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -2654,7 +2879,7 @@ function AccountsPage({ sb, S, profiles, reload, oldDb }) {
       {err && <div style={{ fontSize: 13, color: OVER }}>{err}</div>}
       <div style={{ ...card, overflow: 'hidden' }}>
         <div style={{ display: 'grid', gridTemplateColumns: G, gap: 10, padding: '8px 16px', fontSize: 11, color: V.muted2, background: V.tint, borderBottom: `1px solid ${V.line}` }}>
-          <span>操作</span><span>顯示名稱</span><span>Email</span><span>狀態</span><span>權限</span><span>對應團隊成員</span><span style={{ textAlign: 'right' }}>註冊時間</span>
+          <span>操作</span><span>顯示名稱</span><span>Email</span><span>狀態</span><span>權限</span><span>可見分頁</span><span>對應團隊成員</span><span style={{ textAlign: 'right' }}>註冊時間</span>
         </div>
         {sorted.map((p) => <AccountRow key={p.id} p={p} S={S} sb={sb} G={G} isMe={p.id === S.profile.id} canDelete={!!S.profile.is_owner} onErr={setErr} reload={reload} />)}
         {sorted.length === 0 && <div style={{ padding: 20, fontSize: 13, color: V.muted2 }}>讀取中…</div>}
@@ -2829,7 +3054,21 @@ function App({ sb = null, profile = null }) {
   const pendingN = profiles.filter((p) => p.status === 'pending').length;
   const [dbVer, recheckDb] = useDbVersion(sb);
   const oldDb = dbVer !== null && dbVer < SCHEMA_VERSION;
-  const [view, setView] = useState('overview');
+  const cu = S.isCust;
+  const [view, setView] = useState(() => (profile && profile.role === 'customer' ? 'list' : 'overview'));
+  // 客戶分頁：工程清單與生產排程共用，記住上次選的
+  const [tabPick, setTabPickState] = useState(() => lsGet('tab'));
+  const setTab = (k) => { setTabPickState(k); lsSet('tab', k); };
+  const tabKeys = useMemo(() => {
+    const known = new Set(S.customers.map((c) => c.id));
+    const orphan = !cu && (S.rows.some((r) => !known.has(r.customer)) || S.plans.some((p) => !known.has(p.customer)));
+    return [...S.customers.map((c) => c.id), ...(orphan && S.customers.length ? [NO_TAB] : [])];
+  }, [S.customers, S.rows, S.plans, cu]);
+  const tab = tabKeys.length === 0 ? null : tabKeys.includes(tabPick) ? tabPick : tabKeys[0];
+  const Sr = useMemo(() => scopeStore(S, tab, 'rows'), [S, tab]);
+  const Sp = useMemo(() => scopeStore(S, tab, 'plans'), [S, tab]);
+  const Dr = useMemo(() => derive(Sr.rows, S.owners, S.settings), [Sr.rows, S.owners, S.settings]);
+  const tabCount = (k) => { const z = scopeStore(S, k, view === 'plan' ? 'plans' : 'rows'); return view === 'plan' ? z.plans.length : z.rows.length; };
   useEffect(() => { if (view === 'accounts' && isAdmin) reloadProfiles(); }, [view]);
   const [picked, setPicked] = useState({});
   const [eview, setEview] = useState('list');
@@ -2847,10 +3086,12 @@ function App({ sb = null, profile = null }) {
     S.filesByRow.forEach((fs) => fs.forEach((f) => see(f.created, '', '附件')));
     return best;
   }, [S.rows, S.plans, S.logs, S.filesByRow]);
-  const P = usePresence(sb, profile, view);
-  const tabs = [['overview', '總覽'], ['daily', '每日'], ['combo', '複合排程'], ['list', '工程清單'], ['plan', '生產排程'], ['board', '卡片看板'], ...(isAdmin ? [['accounts', '帳號管理']] : [])];
+  const P = usePresence(cu ? null : sb, profile, view);   // 客戶帳號不加入線上名單，也看不到誰在線
+  const tabs = cu ? [['list', '工程清單'], ['plan', '生產排程']]
+    : [['overview', '總覽'], ['daily', '每日'], ['combo', '複合排程'], ['list', '工程清單'], ['plan', '生產排程'], ['board', '卡片看板'], ...(isAdmin ? [['accounts', '帳號管理']] : [])];
   const badge =
     S.mode === 'connecting' ? ['連線中…', V.muted2] :
+    cu ? ['僅供瀏覽', V.muted2] :
     S.readOnly ? ['唯讀（可瀏覽，無法修改）', 'oklch(0.55 0.12 70)'] :
     S.mode === 'sb' ? (S.live ? ['● 線上共用・即時同步', 'oklch(0.55 0.11 155)'] : ['● 線上共用・每 20 秒更新', 'oklch(0.55 0.1 120)']) :
     ['僅存在這台裝置（未連線）', 'oklch(0.55 0.12 70)'];
@@ -2878,20 +3119,21 @@ function App({ sb = null, profile = null }) {
           <SettingsMenu S={S} />
           <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1, lineHeight: 1.3 }}>
             <span style={{ fontSize: 12, color: badge[1], whiteSpace: 'nowrap' }}>{badge[0]}</span>
-            {sb && <OnlineBadge P={P} meId={profile && profile.id} />}
+            {sb && !cu && <OnlineBadge P={P} meId={profile && profile.id} />}
           </span>
-          <span title={last.t ? `最後一筆修改：${last.what}${last.who ? '・' + last.who : ''}（${last.t}）` : '還沒有任何修改'} style={{ fontSize: 11, color: V.muted2, whiteSpace: 'nowrap', display: 'flex', flexDirection: 'column', lineHeight: 1.25, alignItems: 'flex-end' }}>
+          {!cu && <span title={last.t ? `最後一筆修改：${last.what}${last.who ? '・' + last.who : ''}（${last.t}）` : '還沒有任何修改'} style={{ fontSize: 11, color: V.muted2, whiteSpace: 'nowrap', display: 'flex', flexDirection: 'column', lineHeight: 1.25, alignItems: 'flex-end' }}>
             <span>最後更新 <span style={{ fontFamily: MONO }}>{last.t ? last.t.slice(5) : '—'}</span></span>
             {last.t && <span style={{ fontSize: 10.5, color: V.faint }}>{last.what}{last.who ? '・' + last.who : ''}</span>}
-          </span>
+          </span>}
         </div>
       </header>
       {sb && <SchemaBanner ver={dbVer} isAdmin={isAdmin} recheck={recheckDb} />}
+      {(view === 'list' || view === 'plan') && tab && <TabBar S={S} tab={tab} setTab={setTab} keys={tabKeys} count={tabCount} />}
 
       {view === 'list' ? (
-        <WorklistPage S={S} D={D} picked={picked} setPicked={setPicked} eview={eview} setEview={setEview} openLogs={setLogRowId} />
+        <WorklistPage S={Sr} D={Dr} picked={picked} setPicked={setPicked} eview={eview} setEview={setEview} openLogs={setLogRowId} />
       ) : view === 'plan' ? (
-        <PlanPage S={S} />
+        <PlanPage S={Sp} />
       ) : view === 'combo' ? (
         <div style={{ flex: 1, overflow: 'auto', padding: 24 }}><ComboPage S={S} D={D} /></div>
       ) : view === 'accounts' && isAdmin ? (
@@ -2912,7 +3154,7 @@ function App({ sb = null, profile = null }) {
         </div>
       )}
 
-      {logRow && <LogDrawer key={logRow.id} row={logRow} S={S} ro={!S.canEdit} onClose={closeLogs} />}
+      {logRow && !cu && <LogDrawer key={logRow.id} row={logRow} S={S} ro={!S.canEdit} onClose={closeLogs} />}
       {S.notice && (
         <div style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', background: V.btnBg, color: V.btnFg, padding: '8px 10px 8px 16px', borderRadius: 8, fontSize: 13, boxShadow: '0 8px 24px rgba(0,0,0,0.25)', zIndex: 60, display: 'flex', alignItems: 'center', gap: 12, maxWidth: '80vw' }}>
           <span>{S.notice.text}</span>
