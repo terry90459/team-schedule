@@ -1,0 +1,32 @@
+name: Supabase 保活
+
+# 免費方案一週沒有資料庫活動就會暫停；每天呼叫一次 keepalive()（台灣時間每天 08:17）
+on:
+  schedule:
+    - cron: '17 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 呼叫 Supabase keepalive()
+        env:
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ vars.SUPABASE_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_KEY" ]; then
+            echo "::error::還沒設定 SUPABASE_URL / SUPABASE_KEY"; exit 1
+          fi
+          for i in 1 2 3; do
+            code=$(curl -s -o out.txt -w "%{http_code}" -X POST "$SUPABASE_URL/rest/v1/rpc/keepalive" \
+              -H "apikey: $SUPABASE_KEY" -H "Content-Type: application/json" -d '{}')
+            echo "HTTP $code $(cat out.txt)"
+            [ "$code" = "200" ] && exit 0
+            sleep 20
+          done
+          echo "::error::保活失敗。若 Supabase 專案已被暫停，請到 Supabase 後台按 Resume project；若是剛更新程式，請先把最新的 supabase/schema.sql 貼到 SQL Editor 執行。"
+          exit 1

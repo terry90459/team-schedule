@@ -92,7 +92,10 @@ schema 更新後（例如這次新增工程師／Planner），請把 `supabase/s
 ## 免費方案的限制
 
 - 資料庫 500 MB（純文字資料，幾年內用不完）
-- **一週沒有任何人使用，專案會被暫停**，到 Supabase 後台按 Restore 即可恢復，資料不會不見
+- **一週沒有資料庫活動，專案會被暫停**。已加上自動保活：`.github/workflows/keepalive.yml` 每天台灣時間 08:17 呼叫一次 `keepalive()`（只寫一筆時間戳）。
+  - 可在 GitHub → Actions →「Supabase 保活」→ Run workflow 手動測試；失敗時 GitHub 會寄信通知。
+  - 注意：public repo 若 **60 天沒有任何 commit**，GitHub 會自動停用排程（會寄信），到 Actions 頁面按 Enable workflow 即可。
+  - 萬一還是被暫停：Supabase 後台選專案 → **Resume project**，資料與設定都會回來（暫停後一年內可恢復）。
 - 建議定期用頁面上的「匯出 CSV」備份，存到公司網路磁碟
 
 ---

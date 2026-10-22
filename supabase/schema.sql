@@ -391,3 +391,23 @@ begin
     end if;
   end loop;
 end $$;
+
+-- ---------------------------------------------------------------------
+-- 6. 保活：免費方案一週沒有資料庫活動會暫停，GitHub Actions 每天呼叫一次
+--    （只寫入一筆時間戳，不讀取也不回傳任何工作資料）
+-- ---------------------------------------------------------------------
+create table if not exists public.keepalive (
+  id  int primary key default 1 check (id = 1),
+  at  timestamptz not null default now(),
+  n   bigint not null default 0
+);
+alter table public.keepalive enable row level security;   -- 沒有任何 policy：網頁讀不到
+revoke all on public.keepalive from anon, authenticated;
+create or replace function public.keepalive() returns text
+language sql security definer set search_path = public as $$
+  insert into public.keepalive (id, at, n) values (1, now(), 1)
+  on conflict (id) do update set at = now(), n = public.keepalive.n + 1
+  returning 'ok ' || to_char(at at time zone 'Asia/Taipei', 'YYYY-MM-DD HH24:MI');
+$$;
+revoke execute on function public.keepalive() from public;
+grant execute on function public.keepalive() to anon, authenticated;
