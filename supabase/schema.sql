@@ -5,29 +5,44 @@
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
--- 1. 帳號與角色
---    pending 待核准（看不到資料）／viewer 只能看
---    engineer 工程師（改工程清單、進度紀錄、附件；生產排程只能看）
---    planner  Planner（改機台生產排程；工程清單只能看）
---    admin    管理員（全部，含成員／機台清單、共用設定、帳號管理）
---    第一個註冊的人自動成為管理員，之後註冊的人都是「待核准」
+-- 1. 帳號：狀態（status）與權限（role）分開
+--    status：pending 待核准／active 使用中／disabled 已停用（後兩者以外都看不到資料）
+--    role  ：viewer 只能看／engineer 工程師／planner Planner／admin 管理員
+--    is_owner：最高管理員（只有一位），唯一能刪除帳號的人；不能被降級或停用
+--    第一個註冊的人自動成為最高管理員，之後註冊的人都是「待核准」
 -- ---------------------------------------------------------------------
 create table if not exists public.profiles (
   id          uuid primary key references auth.users(id) on delete cascade,
   email       text,
   name        text not null default '',
-  role        text not null default 'pending',
+  role        text not null default 'engineer',
   created_at  timestamptz not null default now()
 );
+alter table public.profiles add column if not exists status text;
+alter table public.profiles add column if not exists is_owner boolean not null default false;
 
--- 角色清單（舊版的 editor 一律轉成 engineer）
+-- 舊版資料轉換：role 裡的 pending → status；editor → engineer
 alter table public.profiles drop constraint if exists profiles_role_check;
-update public.profiles set role = 'engineer' where role = 'editor';
-alter table public.profiles add constraint profiles_role_check check (role in ('pending', 'viewer', 'engineer', 'planner', 'admin'));
+alter table public.profiles drop constraint if exists profiles_status_check;
+alter table public.profiles disable trigger user;
+update public.profiles set status = case when role = 'pending' then 'pending' else 'active' end where status is null;
+update public.profiles set role = 'engineer' where role in ('pending', 'editor');
+-- 最高管理員：還沒有的話，指定最早註冊的管理員
+update public.profiles set is_owner = true
+ where id = (select id from public.profiles where role = 'admin' and status = 'active' order by created_at limit 1)
+   and not exists (select 1 from public.profiles where is_owner);
+alter table public.profiles enable trigger user;
+alter table public.profiles alter column status set default 'pending';
+alter table public.profiles alter column status set not null;
+alter table public.profiles alter column role set default 'engineer';
+alter table public.profiles add constraint profiles_role_check check (role in ('viewer', 'engineer', 'planner', 'admin'));
+alter table public.profiles add constraint profiles_status_check check (status in ('pending', 'active', 'disabled'));
+create unique index if not exists profiles_one_owner on public.profiles (is_owner) where is_owner;
 
+-- 目前登入者的有效權限：沒啟用就回傳狀態（pending／disabled／none）
 create or replace function public.app_role() returns text
 language sql stable security definer set search_path = public as $$
-  select coalesce((select role from public.profiles where id = auth.uid()), 'none');
+  select coalesce((select case when status = 'active' then role else status end from public.profiles where id = auth.uid()), 'none');
 $$;
 create or replace function public.can_read() returns boolean
 language sql stable as $$ select public.app_role() in ('viewer', 'engineer', 'planner', 'admin') $$;
@@ -37,18 +52,26 @@ create or replace function public.can_plan() returns boolean
 language sql stable as $$ select public.app_role() in ('planner', 'admin') $$;
 create or replace function public.is_admin() returns boolean
 language sql stable as $$ select public.app_role() = 'admin' $$;
+create or replace function public.is_owner() returns boolean
+language sql stable security definer set search_path = public as $$
+  select coalesce((select is_owner and status = 'active' from public.profiles where id = auth.uid()), false);
+$$;
 
 -- 註冊時自動建立 profile
 create or replace function public.handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$
+declare first boolean;
 begin
   perform pg_advisory_xact_lock(4242);  -- 避免兩人同時註冊都變成管理員
-  insert into public.profiles (id, email, name, role)
+  first := not exists (select 1 from public.profiles where role = 'admin' and status = 'active');
+  insert into public.profiles (id, email, name, role, status, is_owner)
   values (
     new.id,
     new.email,
     coalesce(nullif(trim(new.raw_user_meta_data ->> 'name'), ''), split_part(new.email, '@', 1)),
-    case when exists (select 1 from public.profiles where role = 'admin') then 'pending' else 'admin' end
+    case when first then 'admin' else 'engineer' end,
+    case when first then 'active' else 'pending' end,
+    first and not exists (select 1 from public.profiles where is_owner)
   )
   on conflict (id) do nothing;
   return new;
@@ -57,15 +80,21 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created after insert on auth.users
   for each row execute function public.handle_new_user();
 
--- profile 保護：不能改 id／email；不能把最後一位管理員降級
+-- profile 保護
 create or replace function public.guard_profile() returns trigger
 language plpgsql security definer set search_path = public as $$
 begin
   if new.id <> old.id or coalesce(new.email, '') <> coalesce(old.email, '') then
     raise exception '不能修改帳號 id 或 email';
   end if;
-  if old.role = 'admin' and new.role <> 'admin'
-     and not exists (select 1 from public.profiles where role = 'admin' and id <> old.id) then
+  if new.is_owner is distinct from old.is_owner and auth.uid() is not null then
+    raise exception '最高管理員只能在 Supabase SQL Editor 變更';
+  end if;
+  if old.is_owner and (new.role <> 'admin' or new.status <> 'active') then
+    raise exception '最高管理員不能被降級或停用';
+  end if;
+  if old.role = 'admin' and old.status = 'active' and not (new.role = 'admin' and new.status = 'active')
+     and not exists (select 1 from public.profiles where role = 'admin' and status = 'active' and id <> old.id) then
     raise exception '至少要保留一位管理員';
   end if;
   return new;
@@ -84,9 +113,20 @@ create policy "read own or admin" on public.profiles for select to authenticated
 drop policy if exists "admin update" on public.profiles;
 create policy "admin update" on public.profiles for update to authenticated
   using (public.is_admin()) with check (public.is_admin());
-drop policy if exists "admin delete" on public.profiles;
-create policy "admin delete" on public.profiles for delete to authenticated
-  using (public.is_admin() and id <> auth.uid());
+drop policy if exists "admin delete" on public.profiles;   -- 刪帳號改走 delete_account（只限最高管理員）
+
+-- 刪除帳號：只有最高管理員可以；登入帳號一起刪除（成員清單可選擇保留，歷史資料的名字不會變）
+create or replace function public.delete_account(target uuid, remove_member boolean default false) returns void
+language plpgsql security definer set search_path = public, auth as $$
+begin
+  if not public.is_owner() then raise exception '只有最高管理員可以刪除帳號'; end if;
+  if target = auth.uid() then raise exception '不能刪除自己的帳號'; end if;
+  if exists (select 1 from public.profiles where id = target and is_owner) then raise exception '不能刪除最高管理員'; end if;
+  if remove_member then delete from public.members where profile_id = target; end if;
+  delete from auth.users where id = target;   -- profiles 會一起刪除；保留的成員自動變成「未連結帳號」
+end $$;
+revoke execute on function public.delete_account(uuid, boolean) from public, anon;
+grant execute on function public.delete_account(uuid, boolean) to authenticated;
 
 -- ---------------------------------------------------------------------
 -- 2. 工作資料（只放文字與網路磁碟路徑，不放任何檔案本體）
@@ -201,7 +241,8 @@ end $$;
 drop function if exists public.can_write();  -- 舊版函式，已改成 can_eng／can_plan
 
 revoke all on public.profiles from anon;
-grant select, update, delete on public.profiles to authenticated;
+revoke delete on public.profiles from authenticated;
+grant select, update on public.profiles to authenticated;
 
 -- ---------------------------------------------------------------------
 -- 5. 成員清單與帳號連動
@@ -243,7 +284,7 @@ begin
     perform public._rename_everywhere(old.name, new.name);
     update public.members set name = new.name where profile_id = new.id;
   end if;
-  if new.role not in ('engineer', 'planner', 'admin') then return new; end if;
+  if new.status <> 'active' or new.role not in ('engineer', 'planner', 'admin') then return new; end if;
   tm := case new.role when 'planner' then 'planner' when 'engineer' then 'engineer' else null end;
   select * into m from public.members where profile_id = new.id;
   if found then
@@ -319,7 +360,7 @@ revoke execute on function public.link_member(uuid, text) from public, anon;
 grant execute on function public.link_member(uuid, text) to authenticated;
 
 -- 既有帳號補建／連上成員（重複執行沒關係）
-update public.profiles set role = role where role in ('engineer', 'planner', 'admin');
+update public.profiles set role = role where status = 'active' and role in ('engineer', 'planner', 'admin');
 
 -- ---------------------------------------------------------------------
 -- 4. 即時同步（多人同時開頁面，一邊改另一邊馬上看到）

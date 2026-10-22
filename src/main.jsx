@@ -248,7 +248,7 @@ function useStore(sb, profile) {
   const [localMe, setMeState] = useState(() => lsGet('me'));
   const me = profile ? profile.name : localMe;
   // 角色：engineer 改工程清單／紀錄／附件；planner 改生產排程；admin 全部（含成員、機台、設定）；viewer 只能看
-  const role = profile ? (profile.role === 'editor' ? 'engineer' : profile.role) : 'admin';
+  const role = profile ? (profile.status && profile.status !== 'active' ? 'none' : profile.role === 'editor' ? 'engineer' : profile.role) : 'admin';
   const canEngR = role === 'engineer' || role === 'admin', canPlanR = role === 'planner' || role === 'admin';
   const readOnly = !canEngR && !canPlanR;
   const S = useRef({ be: null, assets: null, queues: {}, d: null }).current;
@@ -2249,8 +2249,8 @@ function SettingsMenu({ S }) {
 /* ============================================================
    帳號：登入／註冊／待核准／帳號管理（Supabase Auth）
    ============================================================ */
-const ROLE_LABEL = { pending: '待核准／停用', viewer: '只能看', engineer: '工程師', planner: 'Planner', admin: '管理員' };
-const ROLE_HINT = { pending: '看不到資料', viewer: '全部只能看', engineer: '改工程清單、進度紀錄；生產排程只能看', planner: '改機台生產排程；工程清單只能看', admin: '全部都能改，含帳號、成員、機台、設定' };
+const ROLE_LABEL = { viewer: '只能看', engineer: '工程師', planner: 'Planner', admin: '管理員' };
+const ROLE_HINT = { viewer: '全部只能看', engineer: '改工程清單、進度紀錄；生產排程只能看', planner: '改機台生產排程；工程清單只能看', admin: '全部都能改，含帳號、成員、機台、設定' };
 const authErr = (e) => {
   const m = (e && e.message) || '';
   if (/Invalid login credentials/i.test(m)) return 'email 或密碼錯誤。';
@@ -2310,11 +2310,16 @@ function AuthPage({ sb }) {
 }
 const lbl = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: V.muted };
 function PendingPage({ sb, profile }) {
+  const st = profile.role === 'none' ? 'none' : profile.status;
+  const msg = {
+    pending: { title: '帳號尚未核准', body: '你的帳號已經註冊，正在等待管理員核准。核准後這個頁面會自動進入，不用重新登入。', fg: SOON.fg },
+    disabled: { title: '帳號已被停用', body: '這個帳號目前無法使用。如果需要恢復，請聯絡管理員。', fg: OVER },
+    none: { title: '找不到帳號資料', body: '這個帳號可能已被刪除。如果需要使用，請聯絡管理員。', fg: OVER },
+  }[st] || { title: '帳號無法使用', body: '請聯絡管理員。', fg: OVER };
   return (
     <AuthShell>
-      <div style={{ fontSize: 14, lineHeight: 1.7 }}>
-        {profile.role === 'none' ? '找不到你的帳號資料，請聯絡管理員。' : <>你好，<b>{profile.name}</b>。帳號已註冊，<b>等待管理員核准</b>（或已被停用）。核准後這個頁面會自動進入。</>}
-      </div>
+      <div style={{ fontSize: 16, fontWeight: 700, color: msg.fg }}>{msg.title}</div>
+      <div style={{ fontSize: 13.5, lineHeight: 1.7 }}>{profile.name && <>你好，<b>{profile.name}</b>。</>}{msg.body}</div>
       <div style={{ fontSize: 12, color: V.muted2 }}>{profile.email}</div>
       <button onClick={() => sb.auth.signOut()} style={lineBtn}>登出</button>
     </AuthShell>
@@ -2333,68 +2338,113 @@ function useProfiles(sb, on) {
   }, [sb, on]);
   return [list, setList];
 }
+const STATUS_LABEL = { pending: '待核准', active: '使用中', disabled: '已停用' };
+const STATUS_TONE = { pending: [SOON.bg, SOON.fg], active: ['oklch(0.94 0.04 155)', 'oklch(0.4 0.1 155)'], disabled: ['oklch(0.93 0.01 80)', 'oklch(0.45 0.01 80)'] };
+const dbErr = (e) => {
+  const m = (e && e.message) || '';
+  if (/至少要保留/.test(m)) return '至少要保留一位管理員。';
+  if (/最高管理員/.test(m)) return m.replace(/^.*?(最高管理員)/, '$1') + '。';
+  if (/只有最高管理員/.test(m)) return '只有最高管理員可以刪除帳號。';
+  return m || '未知原因';
+};
+function AccountRow({ p, S, sb, isMe, canDelete, onErr, reload, G }) {
+  const [ask, setAsk] = useState(false), [rmMember, setRmMember] = useState(false), [busy, setBusy] = useState(false);
+  const upd = async (patch) => {
+    onErr('');
+    const { error } = await sb.from('profiles').update(patch).eq('id', p.id);
+    if (error) onErr(dbErr(error)); else { reload(); setTimeout(() => S.refresh(), 300); }
+  };
+  const setName = async (name) => { const n = name.trim(); if (n && n !== p.name) await upd({ name: n }); };
+  const del = async () => {
+    setBusy(true); onErr('');
+    const { error } = await sb.rpc('delete_account', { target: p.id, remove_member: rmMember });
+    setBusy(false); setAsk(false);
+    if (error) onErr('刪除失敗：' + dbErr(error)); else { reload(); setTimeout(() => S.refresh(), 300); S.say(`已刪除帳號「${p.name}」${rmMember ? '，並從成員清單移除' : '（成員清單保留名字）'}`); }
+  };
+  const m = S.members.find((x) => x.profileId === p.id);
+  const free = S.members.filter((x) => !x.profileId);
+  const [tBg, tFg] = STATUS_TONE[p.status] || STATUS_TONE.pending;
+  const sbtn = (label, onClick, tone) => <button onClick={onClick} style={{ ...FSEL, height: 28, ...(tone === 'go' ? { background: 'oklch(0.5 0.12 155)', borderColor: 'oklch(0.5 0.12 155)', color: '#fff' } : tone === 'stop' ? { color: OVER, borderColor: 'oklch(0.8 0.08 25)' } : null) }}>{label}</button>;
+  return (
+    <div style={{ borderBottom: `1px solid ${V.line}`, background: p.status === 'pending' ? SOON.bg : p.status === 'disabled' ? V.tint : undefined }}>
+      <div style={{ display: 'grid', gridTemplateColumns: G, gap: 10, padding: '8px 16px', alignItems: 'center', opacity: p.status === 'disabled' ? 0.75 : 1 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+          <CellText className="cin" value={p.name} onCommit={setName} style={cin({ fontWeight: 500 })} />
+          {p.is_owner && <span title="最高管理員：唯一可以刪除帳號的人，不能被降級或停用" style={{ flex: 'none', fontSize: 10.5, padding: '1px 6px', borderRadius: 4, background: 'oklch(0.93 0.05 85)', color: 'oklch(0.45 0.1 70)' }}>★ 最高管理員</span>}
+        </span>
+        <span style={{ fontSize: 12, color: V.muted, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.email}{isMe ? '（你）' : ''}</span>
+        <span style={{ justifySelf: 'start', fontSize: 11.5, padding: '2px 9px', borderRadius: 10, background: tBg, color: tFg, fontWeight: 500 }}>{STATUS_LABEL[p.status] || p.status}</span>
+        <select value={p.role} disabled={p.is_owner} onChange={(e) => upd({ role: e.target.value })} title={p.status === 'pending' ? '核准時會給這個權限' : ''} style={{ ...FSEL, height: 30 }}>
+          {Object.entries(ROLE_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          {!ROLE_LABEL[p.role] && <option value={p.role}>{p.role}</option>}
+        </select>
+        <span style={{ fontFamily: MONO, fontSize: 11, color: V.muted2 }}>{(p.created_at || '').slice(0, 16).replace('T', ' ')}</span>
+        {m ? (
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'oklch(0.45 0.1 155)', minWidth: 0 }}>
+            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>✓ {m.name}<span style={{ color: V.muted2, marginLeft: 6 }}>{TEAM_LABEL[m.team] || ''}組</span></span>
+            {free.length > 0 && (
+              <select value="" title="連錯人了？改連到清單裡的另一位成員（原本自動建立、沒有資料的成員會刪掉）" onChange={(e) => e.target.value && S.linkMember(p.id, e.target.value).then((ok) => ok && reload())} style={{ ...FSEL, height: 26, fontSize: 11, color: V.muted2, maxWidth: 80 }}>
+                <option value="">改連到…</option>
+                {free.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+              </select>
+            )}
+          </span>
+        ) : (
+          <select value="" onChange={(e) => e.target.value && S.linkMember(p.id, e.target.value).then((ok) => ok && reload())} style={{ ...FSEL, height: 30, color: V.muted }}>
+            <option value="">{p.status === 'active' && p.role !== 'viewer' ? '（未連結）連結到既有成員…' : p.role === 'viewer' ? '只能看：不加入成員清單' : '核准後自動加入；或先連結到…'}</option>
+            {free.map((x) => <option key={x.id} value={x.id}>{x.name}（{TEAM_LABEL[x.team] || '工程師'}）</option>)}
+          </select>
+        )}
+        <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          {p.is_owner ? <span style={{ fontSize: 11, color: V.faint }}>—</span> : (
+            <>
+              {p.status === 'pending' && sbtn('核准', () => upd({ status: 'active' }), 'go')}
+              {p.status === 'active' && !isMe && sbtn('停用', () => upd({ status: 'disabled' }), 'stop')}
+              {p.status === 'disabled' && sbtn('恢復', () => upd({ status: 'active' }), 'go')}
+              {canDelete && !isMe && !ask && <button className="del" onClick={() => setAsk(true)} title="永久刪除這個登入帳號（只有最高管理員能做）" style={{ ...FSEL, height: 28, color: V.muted2 }}>刪除</button>}
+            </>
+          )}
+        </span>
+      </div>
+      {ask && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '8px 16px 10px', background: 'oklch(0.97 0.02 25)', borderTop: `1px dashed oklch(0.85 0.06 25)`, fontSize: 12.5 }}>
+          <span style={{ color: OVER, fontWeight: 500 }}>確定要永久刪除「{p.name}」（{p.email}）的帳號？</span>
+          <span style={{ color: V.muted }}>刪除後無法登入、無法復原；他以前的工作與紀錄會保留。</span>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+            <input type="checkbox" checked={rmMember} onChange={(e) => setRmMember(e.target.checked)} />同時從成員清單移除名字
+          </label>
+          <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+            <button onClick={() => setAsk(false)} style={{ ...lineBtn, height: 28, fontSize: 12 }}>取消</button>
+            <button onClick={del} disabled={busy} style={{ ...darkBtn, height: 28, fontSize: 12, background: 'oklch(0.55 0.17 25)', color: '#fff' }}>{busy ? '刪除中…' : '確定刪除'}</button>
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
 function AccountsPage({ sb, S, profiles, reload }) {
   const [err, setErr] = useState('');
-  const setRole = async (p, role) => {
-    setErr('');
-    const { error } = await sb.from('profiles').update({ role }).eq('id', p.id);
-    if (error) setErr(error.message.includes('至少要保留') ? '至少要保留一位管理員。' : '更新失敗：' + error.message); else { reload(); setTimeout(() => S.refresh(), 300); }
-  };
-  const setName = async (p, name) => {
-    const n = name.trim(); if (!n || n === p.name) return;
-    setErr('');
-    const { error } = await sb.from('profiles').update({ name: n }).eq('id', p.id);
-    if (error) setErr('改名失敗：' + error.message); else { reload(); S.refresh(); }
-  };
-  const link = async (p, mid) => { setErr(''); if (await S.linkMember(p.id, mid)) reload(); };
-  const sorted = [...profiles].sort((a, b) => (a.role === 'pending' ? 0 : 1) - (b.role === 'pending' ? 0 : 1) || (a.created_at || '').localeCompare(b.created_at || ''));
-  const G = 'minmax(0,1.1fr) minmax(0,1.3fr) 130px 130px 220px';
+  const order = { pending: 0, active: 1, disabled: 2 };
+  const sorted = [...profiles].sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3) || (b.is_owner ? 1 : 0) - (a.is_owner ? 1 : 0) || (a.created_at || '').localeCompare(b.created_at || ''));
+  const G = 'minmax(0,1.3fr) minmax(0,1.2fr) 78px 120px 118px minmax(0,1.3fr) 170px';
+  const cnt = (s) => profiles.filter((p) => p.status === s).length;
   return (
-    <div style={{ maxWidth: 1080, display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ fontSize: 13, color: V.muted, lineHeight: 1.7 }}>
-        同事在登入頁按「註冊新帳號」後會出現在這裡，選擇權限即可核准。要停用某人，把權限改回「待核准／停用」。<br />
-        {Object.entries(ROLE_LABEL).filter(([k]) => k !== 'pending').map(([k, l]) => <span key={k} style={{ marginRight: 14 }}><b>{l}</b>：{ROLE_HINT[k]}</span>)}<br />
-        核准為工程師、Planner 或管理員後，會自動加入團隊成員清單（工程師／管理員 → 工程師組，Planner → Planner 組）。
-        如果清單裡已經有這個人（例如之前手動新增、寫法不同），請在「對應團隊成員」選他，舊資料就會歸到這個帳號。<br />
-        在這裡改名稱，Owner、紀錄人、更新者都會一起改。
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div style={{ fontSize: 13, color: V.muted, lineHeight: 1.75 }}>
+        同事在登入頁「註冊新帳號」後會出現在最上面（待核准）。先選好<b>權限</b>，再按<b>核准</b>。要暫停某人使用請按<b>停用</b>，之後按<b>恢復</b>即可回到原本的權限。<br />
+        {Object.entries(ROLE_LABEL).map(([k, l]) => <span key={k} style={{ marginRight: 14 }}><b>{l}</b>：{ROLE_HINT[k]}</span>)}<br />
+        核准為工程師、Planner 或管理員後，會自動加入團隊成員（工程師／管理員 → 工程師組，Planner → Planner 組）；清單裡已有這個人時，請在「對應團隊成員」選他。在這裡改名稱，Owner、紀錄人、更新者都會一起改。<br />
+        <b>刪除帳號</b>只有 ★ 最高管理員能操作；其他管理員只能核准、停用、恢復。
+      </div>
+      <div style={{ display: 'flex', gap: 14, fontSize: 12, color: V.muted2 }}>
+        <span>待核准 <b style={{ color: cnt('pending') ? SOON.fg : 'inherit' }}>{cnt('pending')}</b></span><span>使用中 <b>{cnt('active')}</b></span><span>已停用 <b>{cnt('disabled')}</b></span>
       </div>
       {err && <div style={{ fontSize: 13, color: OVER }}>{err}</div>}
       <div style={{ ...card, overflow: 'hidden' }}>
         <div style={{ display: 'grid', gridTemplateColumns: G, gap: 10, padding: '8px 16px', fontSize: 11, color: V.muted2, background: V.tint, borderBottom: `1px solid ${V.line}` }}>
-          <span>顯示名稱</span><span>Email</span><span>權限</span><span>註冊時間</span><span>對應團隊成員</span>
+          <span>顯示名稱</span><span>Email</span><span>狀態</span><span>權限</span><span>註冊時間</span><span>對應團隊成員</span><span style={{ textAlign: 'right' }}>操作</span>
         </div>
-        {sorted.map((p) => (
-          <div key={p.id} style={{ display: 'grid', gridTemplateColumns: G, gap: 10, padding: '8px 16px', alignItems: 'center', borderBottom: `1px solid ${V.line}`, background: p.role === 'pending' ? SOON.bg : undefined }}>
-            <CellText className="cin" value={p.name} onCommit={(v) => setName(p, v)} enterBlur={false} style={cin({ fontWeight: 500 })} />
-            <span style={{ fontSize: 12, color: V.muted, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.email}{p.id === S.profile.id ? '（你）' : ''}</span>
-            <select value={p.role} onChange={(e) => setRole(p, e.target.value)} style={{ ...FSEL, height: 30, ...(p.role === 'pending' ? { borderColor: SOON.bd, color: SOON.fg } : null) }}>
-              {Object.entries(ROLE_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-              {!ROLE_LABEL[p.role] && <option value={p.role}>{p.role}</option>}
-            </select>
-            <span style={{ fontFamily: MONO, fontSize: 11, color: V.muted2 }}>{(p.created_at || '').slice(0, 16).replace('T', ' ')}</span>
-            {(() => {
-              const m = S.members.find((x) => x.profileId === p.id);
-              const free = S.members.filter((x) => !x.profileId);
-              if (m) return (
-                <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'oklch(0.45 0.1 155)', minWidth: 0 }}>
-                  <span style={{ whiteSpace: 'nowrap' }}>✓ {m.name}<span style={{ color: V.muted2, marginLeft: 6 }}>{TEAM_LABEL[m.team] || ''}組</span></span>
-                  {free.length > 0 && (
-                    <select value="" title="連錯人了？改連到清單裡的另一位成員（原本自動建立、沒有資料的成員會刪掉）" onChange={(e) => e.target.value && link(p, e.target.value)} style={{ ...FSEL, height: 26, fontSize: 11, color: V.muted2, maxWidth: 90 }}>
-                      <option value="">改連到…</option>
-                      {free.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-                    </select>
-                  )}
-                </span>
-              );
-              return (
-                <select value="" onChange={(e) => e.target.value && link(p, e.target.value)} style={{ ...FSEL, height: 30, color: V.muted }}>
-                  <option value="">{['engineer', 'planner', 'admin'].includes(p.role) ? '（未連結）連結到既有成員…' : '核准後自動加入；或先連結到…'}</option>
-                  {free.map((x) => <option key={x.id} value={x.id}>{x.name}（{TEAM_LABEL[x.team] || '工程師'}）</option>)}
-                </select>
-              );
-            })()}
-          </div>
-        ))}
+        {sorted.map((p) => <AccountRow key={p.id} p={p} S={S} sb={sb} G={G} isMe={p.id === S.profile.id} canDelete={!!S.profile.is_owner} onErr={setErr} reload={reload} />)}
         {sorted.length === 0 && <div style={{ padding: 20, fontSize: 13, color: V.muted2 }}>讀取中…</div>}
       </div>
     </div>
@@ -2405,7 +2455,7 @@ function UserMenu({ sb, S }) {
   return (
     <div style={{ position: 'relative' }}>
       <button onClick={() => setOpen((o) => !o)} style={{ ...FSEL, height: 30, display: 'flex', alignItems: 'center', gap: 6 }}>
-        <Avatar name={S.me || '?'} size={20} />{S.me}<span style={{ fontSize: 10.5, color: V.muted2 }}>{ROLE_LABEL[S.role] || S.profile.role}</span>▾
+        <Avatar name={S.me || '?'} size={20} />{S.me}<span style={{ fontSize: 10.5, color: V.muted2 }}>{S.profile.is_owner ? '★ 最高管理員' : ROLE_LABEL[S.role] || S.profile.role}</span>▾
       </button>
       {open && (
         <>
@@ -2448,7 +2498,8 @@ function RootSB() {
   }, [uidv]);
   if (session === undefined || (session && !profile)) return <AuthShell><div style={{ fontSize: 13, color: V.muted2 }}>連線中…</div></AuthShell>;
   if (!session) return <AuthPage sb={sb} />;
-  if (!['viewer', 'engineer', 'planner', 'editor', 'admin'].includes(profile.role)) return <PendingPage sb={sb} profile={profile} />;
+  const active = profile.status ? profile.status === 'active' : ['viewer', 'engineer', 'planner', 'editor', 'admin'].includes(profile.role);
+  if (!active || profile.role === 'none') return <PendingPage sb={sb} profile={profile} />;
   return <App sb={sb} profile={profile} />;
 }
 
@@ -2457,7 +2508,7 @@ function App({ sb = null, profile = null }) {
   const isAdmin = !!profile && profile.role === 'admin';
   const [profiles, setProfilesList] = useProfiles(sb, isAdmin);
   const reloadProfiles = () => sb.from('profiles').select('*').order('created_at').then(({ data }) => data && setProfilesList(data));
-  const pendingN = profiles.filter((p) => p.role === 'pending').length;
+  const pendingN = profiles.filter((p) => p.status === 'pending').length;
   const [view, setView] = useState('overview');
   useEffect(() => { if (view === 'accounts' && isAdmin) reloadProfiles(); }, [view]);
   const [picked, setPicked] = useState({});
