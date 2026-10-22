@@ -122,8 +122,8 @@ begin
   if not public.is_owner() then raise exception '只有最高管理員可以刪除帳號'; end if;
   if target = auth.uid() then raise exception '不能刪除自己的帳號'; end if;
   if exists (select 1 from public.profiles where id = target and is_owner) then raise exception '不能刪除最高管理員'; end if;
-  if remove_member then delete from public.members where profile_id = target; end if;
-  delete from auth.users where id = target;   -- profiles 會一起刪除；保留的成員自動變成「未連結帳號」
+  -- remove_member 參數保留相容；現在一律從成員清單移除（由 drop_member_on_delete 處理）
+  delete from auth.users where id = target;
 end $$;
 revoke execute on function public.delete_account(uuid, boolean) from public, anon;
 grant execute on function public.delete_account(uuid, boolean) to authenticated;
@@ -284,6 +284,8 @@ begin
     perform public._rename_everywhere(old.name, new.name);
     update public.members set name = new.name where profile_id = new.id;
   end if;
+  -- 停用：從成員清單移除（他名下的工作會在工程清單顯示警示）；恢復時會重新加入
+  if new.status = 'disabled' then delete from public.members where profile_id = new.id; return new; end if;
   if new.status <> 'active' or new.role not in ('engineer', 'planner', 'admin') then return new; end if;
   tm := case new.role when 'planner' then 'planner' when 'engineer' then 'engineer' else null end;
   select * into m from public.members where profile_id = new.id;
@@ -305,6 +307,17 @@ end $$;
 drop trigger if exists sync_member on public.profiles;
 create trigger sync_member after insert or update on public.profiles
   for each row execute function public.sync_member();
+
+-- 刪除帳號（不論從網頁或 Supabase 後台）：同時從成員清單移除
+create or replace function public.drop_member_on_delete() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  delete from public.members where profile_id = old.id;
+  return old;
+end $$;
+drop trigger if exists drop_member_on_delete on public.profiles;
+create trigger drop_member_on_delete before delete on public.profiles
+  for each row execute function public.drop_member_on_delete();
 
 -- 管理員改成員名稱（有連帳號的，帳號名稱一起改）
 create or replace function public.rename_member(member_id text, new_name text) returns void
@@ -359,6 +372,8 @@ grant execute on function public.rename_member(text, text) to authenticated;
 revoke execute on function public.link_member(uuid, text) from public, anon;
 grant execute on function public.link_member(uuid, text) to authenticated;
 
+-- 已停用的帳號：從成員清單移除
+delete from public.members where profile_id in (select id from public.profiles where status = 'disabled');
 -- 既有帳號補建／連上成員（重複執行沒關係）
 update public.profiles set role = role where status = 'active' and role in ('engineer', 'planner', 'admin');
 

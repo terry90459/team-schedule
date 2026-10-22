@@ -464,7 +464,9 @@ function derive(rowsIn, owners, settings) {
     return { ...r, owner, dueD: due, startD: start, dayN: days, over, soon };
   });
   const names = [...new Set([...owners, ...rows.map((r) => r.owner)])].filter((n) => rows.some((r) => r.owner === n));
-  return { today, rows, names };
+  // 負責人已不在工程師成員清單（帳號停用／刪除、被移除或移到 Planner 組）
+  const gone = new Set(rows.map((r) => r.owner).filter((n) => n && n !== UN && !owners.includes(n)));
+  return { today, rows, names, gone };
 }
 
 /* ---------- B3：即將到期（3 天內，含今天） ---------- */
@@ -748,6 +750,7 @@ function WorkCard({ r, rank, S, ro, dnd, canDrag, first, last, dragging, over, c
   const dinfo = dueInfo(r, today);
   if (dinfo) dueFg = dinfo.fg;
   const lastLog = logs && logs[0];
+  const ownerGone = !!r.owner && !S.owners.includes(r.owner) && r.status !== '已完成';
   const ownerOpts = r.owner && !S.owners.includes(r.owner) ? [...S.owners, r.owner] : S.owners;
   const files = S.filesByRow.get(r.id) || [];
   const machineOpts = [...new Set([...(S.machines || []), ...(r.machine ? [r.machine] : [])])].sort(byName);
@@ -773,10 +776,13 @@ function WorkCard({ r, rank, S, ro, dnd, canDrag, first, last, dragging, over, c
           <CellText multiline grow enterBlur className="cin" value={r.item} onCommit={set('item')} disabled={ro} placeholder="工作項目" style={cin({ fontWeight: 600, height: 'auto', minHeight: 30, padding: '5px 8px', lineHeight: 1.45, resize: 'none', overflow: 'hidden', whiteSpace: 'pre-wrap', wordBreak: 'break-word' })} />
         </div>
         <div style={cell}>
-          <select className="cin" value={r.owner || ''} disabled={ro} onChange={(e) => set('owner')(e.target.value)} style={cin({ cursor: ro ? 'default' : 'pointer' })}>
-            <option value="">—</option>
-            {ownerOpts.map((o) => <option key={o} value={o}>{o}</option>)}
-          </select>
+          <div style={{ display: 'flex', flexDirection: 'column', width: '100%', minWidth: 0 }}>
+            <select className="cin" value={r.owner || ''} disabled={ro} onChange={(e) => set('owner')(e.target.value)} style={cin({ cursor: ro ? 'default' : 'pointer', ...(ownerGone ? { color: OVER } : null) })}>
+              <option value="">—</option>
+              {ownerOpts.map((o) => <option key={o} value={o}>{o}{o === r.owner && ownerGone ? '（已不在成員清單）' : ''}</option>)}
+            </select>
+            {ownerGone && <span title="這位負責人已不在工程師成員清單（帳號已停用或刪除，或已被移除），請改派給其他人" style={{ fontSize: 10.5, color: OVER, padding: '0 6px', lineHeight: 1.2, fontWeight: 500, cursor: 'help', whiteSpace: 'nowrap' }}>⚠ 已不在清單</span>}
+          </div>
         </div>
         <div style={cell}>
           <CellText multiline grow enterBlur className="cin" value={r.custOwner} onCommit={set('custOwner')} disabled={ro} placeholder="客戶窗口" style={cin({ height: 'auto', minHeight: 30, padding: '5px 8px', lineHeight: 1.45, resize: 'none', overflow: 'hidden', wordBreak: 'break-word' })} />
@@ -1265,7 +1271,7 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
   const q = query.trim().toLowerCase();
   const extra = !!(fOwner || fMachine || fPrio || mine);
   let list = S.rows.filter((r) => (!filter || r.status === filter) && (!hideDone || filter === '已完成' || r.status !== '已完成')
-    && (!fOwner || (fOwner === '__none__' ? !r.owner : r.owner === fOwner)) && (!mine || (!!S.me && r.owner === S.me))
+    && (!fOwner || (fOwner === '__none__' ? !r.owner : fOwner === '__gone__' ? (!!r.owner && !S.owners.includes(r.owner)) : r.owner === fOwner)) && (!mine || (!!S.me && r.owner === S.me))
     && (!fMachine || (fMachine === '__none__' ? !r.machine : r.machine === fMachine)) && (!fPrio || r.priority === fPrio)
     && (!q || [r.item, r.owner, r.custOwner, r.machine, r.remark, ...(logsByRow.get(r.id) || []).map((l) => l.text)].join(' ').toLowerCase().includes(q)));
   if (sortKey !== 'order') {
@@ -1284,6 +1290,7 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
   const machines = [...new Set(S.rows.map((r) => (r.machine || '').trim()).filter(Boolean))].sort();
   const canDrag = !ro && sortKey === 'order' && !filter && !q && !extra;
   const doneN = S.rows.filter((r) => r.status === '已完成').length;
+  const goneN = S.rows.filter((r) => r.owner && !S.owners.includes(r.owner) && r.status !== '已完成').length;
   const clashByRow = useMemo(() => engPlanClash(D.rows, S.plans), [D.rows, S.plans]);
   const clearExtra = () => { setFOwner(''); setFMachine(''); setFPrio(''); setMine(false); };
 
@@ -1425,6 +1432,7 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
             <option value="">全部負責人</option>
             {S.owners.map((o) => <option key={o} value={o}>{o}</option>)}
             <option value="__none__">（未指派）</option>
+            {goneN > 0 && <option value="__gone__">⚠ 負責人已不在清單（{goneN}）</option>}
           </select>
           <button onClick={() => setMine((v) => !v)} disabled={!S.me} title={S.me ? `只看 ${S.me} 負責的` : '請先在右上角選擇「我是」'} style={{ ...FSEL, ...(mine ? FON : null), opacity: S.me ? 1 : 0.5 }}>只看我的</button>
           <select value={fMachine} onChange={(e) => setFMachine(e.target.value)} style={{ ...FSEL, ...(fMachine ? FON : null) }}>
@@ -1437,6 +1445,11 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
             {PRIO.map((o) => <option key={o} value={o}>{o}</option>)}
           </select>
           {extra && <button onClick={clearExtra} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 12, color: V.muted2 }}>清除篩選</button>}
+          {goneN > 0 && (
+            <button onClick={() => setFOwner(fOwner === '__gone__' ? '' : '__gone__')} title="這些工作的負責人帳號已停用或刪除（或已從成員清單移除），請改派" style={{ border: `1px solid oklch(0.85 0.06 25)`, background: fOwner === '__gone__' ? OVER : 'oklch(0.97 0.02 25)', color: fOwner === '__gone__' ? '#fff' : OVER, borderRadius: 7, height: 30, padding: '0 10px', fontSize: 12, cursor: 'pointer', marginLeft: 6 }}>
+              ⚠ {goneN} 筆工作的負責人已不在清單{fOwner === '__gone__' ? '（顯示中，點一下取消）' : '，點一下只看這些'}
+            </button>
+          )}
           {clashByRow.size > 0 && <span style={{ fontSize: 12, color: CLASH, marginLeft: 6 }} title="工程項目的機台與日期，和機台生產排程重疊">⚠ {clashByRow.size} 筆工程項目與生產排程撞機台</span>}
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
             <div style={{ position: 'relative' }}>
@@ -1656,7 +1669,7 @@ function engParts(D, goGantt) {
           </div>
           {people.map((p) => (
             <div key={p.name} className="person-row" onClick={() => goGantt(p.name)} style={{ display: 'grid', gridTemplateColumns: PCOLS, padding: '10px 20px', fontSize: 13, borderBottom: `1px solid ${V.line}`, cursor: 'pointer', alignItems: 'center' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}><Avatar name={p.name} size={24} /><span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</span></div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}><Avatar name={p.name} size={24} /><span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</span>{D.gone.has(p.name) && <span title="已不在工程師成員清單（帳號停用或刪除）" style={{ fontSize: 10.5, color: OVER, flex: 'none' }}>⚠ 已不在清單</span>}</div>
               <span style={{ fontFamily: MONO, textAlign: 'right' }}>{p.count}</span>
               <span style={{ fontFamily: MONO, textAlign: 'right' }}>{p.done}</span>
               <span style={{ fontFamily: MONO, textAlign: 'right', color: p.soon ? SOON.fg : V.ink2 }}>{p.soon}</span>
@@ -2178,6 +2191,7 @@ function DailyPage({ S, D, openLogs }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 6px 6px', borderBottom: `1px solid ${V.line}` }}>
                 <Avatar name={p.name} size={26} />
                 <span style={{ fontSize: 14, fontWeight: 600 }}>{p.name}</span>
+                {D.gone.has(p.name) && <span title="已不在工程師成員清單（帳號停用或刪除），請改派他的工作" style={{ fontSize: 10.5, color: OVER }}>⚠ 已不在清單</span>}
                 {p.name === S.me && <span style={{ fontSize: 10, color: 'var(--accent)' }}>我</span>}
                 <span style={{ marginLeft: 'auto', fontFamily: MONO, fontSize: 11, color: V.muted2 }}>{p.act.length} 件{p.over.length ? `・逾期 ${p.over.length}` : ''}</span>
               </div>
@@ -2348,7 +2362,7 @@ const dbErr = (e) => {
   return m || '未知原因';
 };
 function AccountRow({ p, S, sb, isMe, canDelete, onErr, reload, G }) {
-  const [ask, setAsk] = useState(false), [rmMember, setRmMember] = useState(false), [busy, setBusy] = useState(false);
+  const [ask, setAsk] = useState(false), [busy, setBusy] = useState(false);
   const upd = async (patch) => {
     onErr('');
     const { error } = await sb.from('profiles').update(patch).eq('id', p.id);
@@ -2357,9 +2371,9 @@ function AccountRow({ p, S, sb, isMe, canDelete, onErr, reload, G }) {
   const setName = async (name) => { const n = name.trim(); if (n && n !== p.name) await upd({ name: n }); };
   const del = async () => {
     setBusy(true); onErr('');
-    const { error } = await sb.rpc('delete_account', { target: p.id, remove_member: rmMember });
+    const { error } = await sb.rpc('delete_account', { target: p.id, remove_member: true });
     setBusy(false); setAsk(false);
-    if (error) onErr('刪除失敗：' + dbErr(error)); else { reload(); setTimeout(() => S.refresh(), 300); S.say(`已刪除帳號「${p.name}」${rmMember ? '，並從成員清單移除' : '（成員清單保留名字）'}`); }
+    if (error) onErr('刪除失敗：' + dbErr(error)); else { reload(); setTimeout(() => S.refresh(), 300); S.say(`已刪除帳號「${p.name}」`); }
   };
   const m = S.members.find((x) => x.profileId === p.id);
   const free = S.members.filter((x) => !x.profileId);
@@ -2368,6 +2382,16 @@ function AccountRow({ p, S, sb, isMe, canDelete, onErr, reload, G }) {
   return (
     <div style={{ borderBottom: `1px solid ${V.line}`, background: p.status === 'pending' ? SOON.bg : p.status === 'disabled' ? V.tint : undefined }}>
       <div style={{ display: 'grid', gridTemplateColumns: G, gap: 10, padding: '8px 16px', alignItems: 'center', opacity: p.status === 'disabled' ? 0.75 : 1 }}>
+        <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-start', flexWrap: 'wrap' }}>
+          {p.is_owner ? <span style={{ fontSize: 11, color: V.faint }}>—</span> : (
+            <>
+              {p.status === 'pending' && sbtn('核准', () => upd({ status: 'active' }), 'go')}
+              {p.status === 'active' && !isMe && sbtn('停用', () => upd({ status: 'disabled' }), 'stop')}
+              {p.status === 'disabled' && sbtn('恢復', () => upd({ status: 'active' }), 'go')}
+              {canDelete && !isMe && !ask && <button className="del" onClick={() => setAsk(true)} title="永久刪除這個登入帳號（只有最高管理員能做）" style={{ ...FSEL, height: 28, color: V.muted2 }}>刪除</button>}
+            </>
+          )}
+        </span>
         <span style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
           <CellText className="cin" value={p.name} onCommit={setName} style={cin({ fontWeight: 500 })} />
           {p.is_owner && <span title="最高管理員：唯一可以刪除帳號的人，不能被降級或停用" style={{ flex: 'none', fontSize: 10.5, padding: '1px 6px', borderRadius: 4, background: 'oklch(0.93 0.05 85)', color: 'oklch(0.45 0.1 70)' }}>★ 最高管理員</span>}
@@ -2378,7 +2402,6 @@ function AccountRow({ p, S, sb, isMe, canDelete, onErr, reload, G }) {
           {Object.entries(ROLE_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
           {!ROLE_LABEL[p.role] && <option value={p.role}>{p.role}</option>}
         </select>
-        <span style={{ fontFamily: MONO, fontSize: 11, color: V.muted2 }}>{(p.created_at || '').slice(0, 16).replace('T', ' ')}</span>
         {m ? (
           <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'oklch(0.45 0.1 155)', minWidth: 0 }}>
             <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>✓ {m.name}<span style={{ color: V.muted2, marginLeft: 6 }}>{TEAM_LABEL[m.team] || ''}組</span></span>
@@ -2395,24 +2418,12 @@ function AccountRow({ p, S, sb, isMe, canDelete, onErr, reload, G }) {
             {free.map((x) => <option key={x.id} value={x.id}>{x.name}（{TEAM_LABEL[x.team] || '工程師'}）</option>)}
           </select>
         )}
-        <span style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-          {p.is_owner ? <span style={{ fontSize: 11, color: V.faint }}>—</span> : (
-            <>
-              {p.status === 'pending' && sbtn('核准', () => upd({ status: 'active' }), 'go')}
-              {p.status === 'active' && !isMe && sbtn('停用', () => upd({ status: 'disabled' }), 'stop')}
-              {p.status === 'disabled' && sbtn('恢復', () => upd({ status: 'active' }), 'go')}
-              {canDelete && !isMe && !ask && <button className="del" onClick={() => setAsk(true)} title="永久刪除這個登入帳號（只有最高管理員能做）" style={{ ...FSEL, height: 28, color: V.muted2 }}>刪除</button>}
-            </>
-          )}
-        </span>
+        <span style={{ fontFamily: MONO, fontSize: 11, color: V.muted2, textAlign: 'right' }}>{(p.created_at || '').slice(0, 16).replace('T', ' ')}</span>
       </div>
       {ask && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '8px 16px 10px', background: 'oklch(0.97 0.02 25)', borderTop: `1px dashed oklch(0.85 0.06 25)`, fontSize: 12.5 }}>
           <span style={{ color: OVER, fontWeight: 500 }}>確定要永久刪除「{p.name}」（{p.email}）的帳號？</span>
-          <span style={{ color: V.muted }}>刪除後無法登入、無法復原；他以前的工作與紀錄會保留。</span>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
-            <input type="checkbox" checked={rmMember} onChange={(e) => setRmMember(e.target.checked)} />同時從成員清單移除名字
-          </label>
+          <span style={{ color: V.muted }}>刪除後無法登入、無法復原，也會從成員清單移除；他負責的工作會保留，並在工程清單顯示「負責人已不在清單」提醒改派。</span>
           <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
             <button onClick={() => setAsk(false)} style={{ ...lineBtn, height: 28, fontSize: 12 }}>取消</button>
             <button onClick={del} disabled={busy} style={{ ...darkBtn, height: 28, fontSize: 12, background: 'oklch(0.55 0.17 25)', color: '#fff' }}>{busy ? '刪除中…' : '確定刪除'}</button>
@@ -2426,7 +2437,7 @@ function AccountsPage({ sb, S, profiles, reload }) {
   const [err, setErr] = useState('');
   const order = { pending: 0, active: 1, disabled: 2 };
   const sorted = [...profiles].sort((a, b) => (order[a.status] ?? 3) - (order[b.status] ?? 3) || (b.is_owner ? 1 : 0) - (a.is_owner ? 1 : 0) || (a.created_at || '').localeCompare(b.created_at || ''));
-  const G = 'minmax(0,1.3fr) minmax(0,1.2fr) 78px 120px 118px minmax(0,1.3fr) 170px';
+  const G = '150px minmax(0,1.3fr) minmax(0,1.2fr) 78px 120px minmax(0,1.3fr) 118px';
   const cnt = (s) => profiles.filter((p) => p.status === s).length;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
@@ -2434,7 +2445,7 @@ function AccountsPage({ sb, S, profiles, reload }) {
         同事在登入頁「註冊新帳號」後會出現在最上面（待核准）。先選好<b>權限</b>，再按<b>核准</b>。要暫停某人使用請按<b>停用</b>，之後按<b>恢復</b>即可回到原本的權限。<br />
         {Object.entries(ROLE_LABEL).map(([k, l]) => <span key={k} style={{ marginRight: 14 }}><b>{l}</b>：{ROLE_HINT[k]}</span>)}<br />
         核准為工程師、Planner 或管理員後，會自動加入團隊成員（工程師／管理員 → 工程師組，Planner → Planner 組）；清單裡已有這個人時，請在「對應團隊成員」選他。在這裡改名稱，Owner、紀錄人、更新者都會一起改。<br />
-        <b>刪除帳號</b>只有 ★ 最高管理員能操作；其他管理員只能核准、停用、恢復。
+        <b>停用</b>或<b>刪除</b>的帳號會從成員清單移除；他負責的工作會保留，並在工程清單顯示「⚠ 負責人已不在清單」提醒改派（恢復帳號後會自動回到清單）。<b>刪除帳號</b>只有 ★ 最高管理員能操作。
       </div>
       <div style={{ display: 'flex', gap: 14, fontSize: 12, color: V.muted2 }}>
         <span>待核准 <b style={{ color: cnt('pending') ? SOON.fg : 'inherit' }}>{cnt('pending')}</b></span><span>使用中 <b>{cnt('active')}</b></span><span>已停用 <b>{cnt('disabled')}</b></span>
@@ -2442,7 +2453,7 @@ function AccountsPage({ sb, S, profiles, reload }) {
       {err && <div style={{ fontSize: 13, color: OVER }}>{err}</div>}
       <div style={{ ...card, overflow: 'hidden' }}>
         <div style={{ display: 'grid', gridTemplateColumns: G, gap: 10, padding: '8px 16px', fontSize: 11, color: V.muted2, background: V.tint, borderBottom: `1px solid ${V.line}` }}>
-          <span>顯示名稱</span><span>Email</span><span>狀態</span><span>權限</span><span>註冊時間</span><span>對應團隊成員</span><span style={{ textAlign: 'right' }}>操作</span>
+          <span>操作</span><span>顯示名稱</span><span>Email</span><span>狀態</span><span>權限</span><span>對應團隊成員</span><span style={{ textAlign: 'right' }}>註冊時間</span>
         </div>
         {sorted.map((p) => <AccountRow key={p.id} p={p} S={S} sb={sb} G={G} isMe={p.id === S.profile.id} canDelete={!!S.profile.is_owner} onErr={setErr} reload={reload} />)}
         {sorted.length === 0 && <div style={{ padding: 20, fontSize: 13, color: V.muted2 }}>讀取中…</div>}
