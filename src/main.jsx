@@ -1196,14 +1196,14 @@ function MemberRow({ m, S, roA, onRemove, other }) {
         <>
           {m.team !== 'planner' && <span style={{ fontFamily: MONO, fontSize: 11, color: V.faint }}>{cnt} 件</span>}
           {!roA && <button className="mv" onClick={() => { setV(m.name); setEdit(true); }} title="改名（Owner、紀錄人、更新者會一起改）" style={{ ...mvBtn, width: 22, fontSize: 12 }}>✎</button>}
-          {!roA && !m.profileId && <button className="mv" onClick={() => S.setMemberTeam(m.id, other)} title={other === 'planner' ? '移到 Planner 成員（機台生產排程頁）' : '移到工程師成員（工程清單頁）'} style={{ ...mvBtn, width: 22, fontSize: 12 }}>⇅</button>}
+          {!roA && !m.profileId && <button className="mv" onClick={() => S.setMemberTeam(m.id, other)} title={other === 'planner' ? '移到 Planner 成員（生產排程頁）' : '移到工程師成員（工程清單頁）'} style={{ ...mvBtn, width: 22, fontSize: 12 }}>⇅</button>}
           {!roA && <button disabled={!!m.profileId} onClick={() => onRemove(m.name)} title={m.profileId ? '已連結帳號的成員，請到「帳號管理」停用' : '移除'} style={{ border: 'none', background: 'transparent', cursor: m.profileId ? 'not-allowed' : 'pointer', color: V.faint, fontSize: 14, opacity: m.profileId ? 0.35 : 1 }}>×</button>}
         </>
       )}
     </div>
   );
 }
-// team：這個頁面只管哪一組（工程清單頁 → engineer，機台生產排程頁 → planner）
+// team：這個頁面只管哪一組（工程清單頁 → engineer，生產排程頁 → planner）
 function MemberPanel({ S, roA, onRemove, onClose, team }) {
   const [name, setName] = useState('');
   const other = team === 'planner' ? 'engineer' : 'planner';
@@ -2407,7 +2407,7 @@ function App({ sb = null, profile = null }) {
   const [profiles, setProfilesList] = useProfiles(sb, isAdmin);
   const reloadProfiles = () => sb.from('profiles').select('*').order('created_at').then(({ data }) => data && setProfilesList(data));
   const pendingN = profiles.filter((p) => p.role === 'pending').length;
-  const [view, setView] = useState('list');
+  const [view, setView] = useState('overview');
   useEffect(() => { if (view === 'accounts' && isAdmin) reloadProfiles(); }, [view]);
   const [picked, setPicked] = useState({});
   const [eview, setEview] = useState('list');
@@ -2416,7 +2416,7 @@ function App({ sb = null, profile = null }) {
   const logRow = logRowId && S.rows.find((r) => r.id === logRowId);
   const D = useMemo(() => derive(S.rows, S.owners, S.settings), [S.rows, S.owners, S.settings]);
   const last = S.rows.map((r) => r.updated || '').sort().pop() || '—';
-  const tabs = [['list', '工程清單'], ['daily', '每日'], ['plan', '機台生產排程'], ['overview', '總覽'], ['combo', '複合排程'], ['board', '卡片看板'], ...(isAdmin ? [['accounts', '帳號管理']] : [])];
+  const tabs = [['overview', '總覽'], ['daily', '每日'], ['combo', '複合排程'], ['list', '工程清單'], ['plan', '生產排程'], ['board', '卡片看板'], ...(isAdmin ? [['accounts', '帳號管理']] : [])];
   const badge =
     S.mode === 'connecting' ? ['連線中…', V.muted2] :
     S.readOnly ? ['唯讀（可瀏覽，無法修改）', 'oklch(0.55 0.12 70)'] :
