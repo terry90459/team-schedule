@@ -242,7 +242,10 @@ function useStore(sb, profile) {
   const [notice, setNotice] = useState(null); // { text, action?: { label, run } }
   const [localMe, setMeState] = useState(() => lsGet('me'));
   const me = profile ? profile.name : localMe;
-  const readOnly = !!profile && !['editor', 'admin'].includes(profile.role);
+  // 角色：engineer 改工程清單／紀錄／附件；planner 改生產排程；admin 全部（含成員、機台、設定）；viewer 只能看
+  const role = profile ? (profile.role === 'editor' ? 'engineer' : profile.role) : 'admin';
+  const canEngR = role === 'engineer' || role === 'admin', canPlanR = role === 'planner' || role === 'admin';
+  const readOnly = !canEngR && !canPlanR;
   const S = useRef({ be: null, assets: null, queues: {}, d: null }).current;
   S.d = d; S.me = me;
 
@@ -297,8 +300,10 @@ function useStore(sb, profile) {
   const api = {
     rows, owners, machines, settings, plans: d.plans, logs: d.logs, members: d.members, filesByRow,
     mode, live, readOnly, notice, me, profile,
-    canEdit: !readOnly && mode !== 'connecting',
-    canAdmin: !profile || profile.role === 'admin',
+    role,
+    canEdit: canEngR && mode !== 'connecting',   // 工程清單、進度紀錄、附件
+    canPlan: canPlanR && mode !== 'connecting',  // 機台生產排程
+    canAdmin: role === 'admin' && mode !== 'connecting', // 成員／機台清單、共用設定
     canUpload: mode === 'local', // 線上版不存檔案本體，附件一律貼網路磁碟路徑或連結
     setMe(n) { if (sb) return sb.rpc('set_my_name', { new_name: n }); setMeState(n); lsSet('me', n); },
     clearNotice: () => setNotice(null),
@@ -1062,7 +1067,8 @@ function mapImport(kind, grid) {
 }
 
 function ImportModal({ S, onClose }) {
-  const [kind, setKind] = useState('eng');
+  const kinds = Object.keys(IMPORT).filter((k) => (k === 'eng' ? S.canEdit : S.canPlan));
+  const [kind, setKind] = useState(kinds[0] || 'eng');
   const [text, setText] = useState('');
   const [addNew, setAddNew] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -1072,7 +1078,7 @@ function ImportModal({ S, onClose }) {
   const newMachines = [...new Set(res.items.map((x) => x.o.machine).filter((n) => n && !S.machines.includes(n)))];
   const go = async () => {
     setBusy(true);
-    if (addNew) { for (const n of newOwners) await S.addOwner(n); for (const n of newMachines) await S.addMachine(n); }
+    if (addNew && S.canAdmin) { for (const n of newOwners) await S.addOwner(n); for (const n of newMachines) await S.addMachine(n); }
     let ord = Math.max(0, ...S.rows.map((r) => Number(r.order) || 0));
     for (const { o } of res.items) {
       if (kind === 'eng') { ord += 1024; await S.add({ ...o, order: ord }); }
@@ -1089,7 +1095,7 @@ function ImportModal({ S, onClose }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span style={{ fontSize: 16, fontWeight: 700 }}>從 Excel 貼上匯入</span>
             <div style={{ display: 'flex', gap: 6, marginLeft: 8 }}>
-              {Object.entries(IMPORT).map(([k, c]) => <button key={k} onClick={() => setKind(k)} style={{ ...FSEL, ...(kind === k ? FON : null) }}>匯入到{c.label}</button>)}
+              {Object.entries(IMPORT).filter(([k]) => kinds.includes(k)).map(([k, c]) => <button key={k} onClick={() => setKind(k)} style={{ ...FSEL, ...(kind === k ? FON : null) }}>匯入到{c.label}</button>)}
             </div>
             <button onClick={onClose} style={{ marginLeft: 'auto', border: 'none', background: 'transparent', fontSize: 18, cursor: 'pointer', color: V.muted }}>×</button>
           </div>
@@ -1117,7 +1123,10 @@ function ImportModal({ S, onClose }) {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 20px', flexWrap: 'wrap' }}>
           <span style={{ fontSize: 12, color: V.muted }}>{res.items.length ? `${res.header ? '已辨識標題列，' : '沒有標題列，依欄位順序對應，'}共 ${res.items.length} 筆` : ''}</span>
-          {(newOwners.length > 0 || newMachines.length > 0) && (
+          {(newOwners.length > 0 || newMachines.length > 0) && !S.canAdmin && (
+            <span style={{ fontSize: 12, color: SOON.fg }}>清單裡沒有的{newOwners.length ? '成員' : ''}{newOwners.length && newMachines.length ? '、' : ''}{newMachines.length ? '機台' : ''}會照樣匯入文字，但要請管理員加入清單才會出現在下拉選單。</span>
+          )}
+          {(newOwners.length > 0 || newMachines.length > 0) && S.canAdmin && (
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: V.ink2 }}>
               <input type="checkbox" checked={addNew} onChange={(e) => setAddNew(e.target.checked)} />
               一併加入清單：{[...newOwners.map((n) => '成員 ' + n), ...newMachines.map((n) => '機台 ' + n)].join('、')}
@@ -1152,7 +1161,7 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
   const [dragId, setDragId] = useState(null);
   const [over, setOver] = useState(null);
   const scroller = useRef(null);
-  const ro = !S.canEdit;
+  const ro = !S.canEdit, roA = !S.canAdmin;
 
   const q = query.trim().toLowerCase();
   const extra = !!(fOwner || fMachine || fPrio || mine);
@@ -1275,6 +1284,7 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
                 <div style={{ position: 'absolute', top: 38, right: 0, width: 280, background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.15)', zIndex: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div style={{ fontSize: 13, fontWeight: 500 }}>團隊成員</div>
                   {S.owners.length === 0 && <div style={{ fontSize: 12, color: V.muted2 }}>尚未新增成員，新增後即可在 Owner 欄位選擇。</div>}
+                  {roA && <div style={{ fontSize: 11.5, color: V.muted2 }}>只有管理員可以新增或移除成員。</div>}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 240, overflow: 'auto' }}>
                     {S.owners.map((n) => {
                       const cnt = S.rows.filter((r) => r.owner === n).length;
@@ -1283,15 +1293,15 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
                           <Avatar name={n} size={20} />
                           <span style={{ flex: 1 }}>{n}</span>
                           <span style={{ fontFamily: MONO, fontSize: 11, color: V.faint }}>{cnt} 件</span>
-                          <button disabled={ro} onClick={() => tryRemoveOwner(n)} title="移除" style={{ border: 'none', background: 'transparent', cursor: ro ? 'default' : 'pointer', color: V.faint, fontSize: 14 }}>×</button>
+                          <button disabled={roA} onClick={() => tryRemoveOwner(n)} title="移除" style={{ border: 'none', background: 'transparent', cursor: roA ? 'default' : 'pointer', color: V.faint, fontSize: 14 }}>×</button>
                         </div>
                       );
                     })}
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>
-                    <input value={newOwner} disabled={ro} onChange={(e) => setNewOwner(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addOwner(); }} placeholder="輸入姓名"
+                    <input value={newOwner} disabled={roA} onChange={(e) => setNewOwner(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addOwner(); }} placeholder="輸入姓名"
                       style={{ flex: 1, minWidth: 0, height: 32, border: `1px solid ${V.line2}`, borderRadius: 7, padding: '0 10px', fontSize: 13, background: V.surface }} />
-                    <button disabled={ro} onClick={addOwner} style={darkBtn}>新增</button>
+                    <button disabled={roA} onClick={addOwner} style={darkBtn}>新增</button>
                   </div>
                 </div>
               </>
@@ -1305,6 +1315,7 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
                 <div style={{ position: 'absolute', top: 38, right: 0, width: 280, background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.15)', zIndex: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 10 }}>
                   <div style={{ fontSize: 13, fontWeight: 500 }}>機台清單</div>
                   {S.machines.length === 0 && <div style={{ fontSize: 12, color: V.muted2 }}>尚未新增機台，新增後即可在 Machine 欄位下拉選擇。</div>}
+                  {roA && <div style={{ fontSize: 11.5, color: V.muted2 }}>只有管理員可以新增或移除機台。</div>}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 240, overflow: 'auto' }}>
                     {S.machines.map((n) => {
                       const cnt = S.rows.filter((r) => r.machine === n).length;
@@ -1312,15 +1323,15 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
                         <div key={n} className="member-item" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, fontSize: 13 }}>
                           <span style={{ flex: 1, fontFamily: MONO, fontSize: 12 }}>{n}</span>
                           <span style={{ fontFamily: MONO, fontSize: 11, color: V.faint }}>{cnt} 件</span>
-                          <MachineDel disabled={ro} engN={cnt} planN={S.plans.filter((p) => p.machine === n).length} onDel={() => S.delMachine(n)} />
+                          <MachineDel disabled={roA} engN={cnt} planN={S.plans.filter((p) => p.machine === n).length} onDel={() => S.delMachine(n)} />
                         </div>
                       );
                     })}
                   </div>
                   <div style={{ display: 'flex', gap: 6 }}>
-                    <input value={newMachine} disabled={ro} onChange={(e) => setNewMachine(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addMachine(); }} placeholder="輸入機台名稱"
+                    <input value={newMachine} disabled={roA} onChange={(e) => setNewMachine(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') addMachine(); }} placeholder="輸入機台名稱"
                       style={{ flex: 1, minWidth: 0, height: 32, border: `1px solid ${V.line2}`, borderRadius: 7, padding: '0 10px', fontSize: 13, background: V.surface }} />
-                    <button disabled={ro} onClick={addMachine} style={darkBtn}>新增</button>
+                    <button disabled={roA} onClick={addMachine} style={darkBtn}>新增</button>
                   </div>
                 </div>
               </>
@@ -1369,7 +1380,7 @@ function WorklistPage({ S, D, picked, setPicked, eview, setEview, openLogs }) {
                 </>
               )}
             </div>
-            <button disabled={ro} onClick={() => setImporting(true)} title="從 Excel 複製多列後貼上" style={{ ...FSEL, opacity: ro ? 0.5 : 1 }}>從 Excel 貼上匯入</button>
+            <button disabled={!S.canEdit && !S.canPlan} onClick={() => setImporting(true)} title="從 Excel 複製多列後貼上" style={{ ...FSEL, opacity: !S.canEdit && !S.canPlan ? 0.5 : 1 }}>從 Excel 貼上匯入</button>
           </div>
         </div>
       )}
@@ -1942,7 +1953,7 @@ function ComboPage({ S, D }) {
 }
 
 function PlanPage({ S }) {
-  const ro = S.readOnly || S.mode === 'connecting';
+  const ro = !S.canPlan;
   const [mode, setMode] = useState('list');
   const [mf, setMf] = useState('');
   const [q, setQ] = useState('');
@@ -2090,8 +2101,8 @@ function SettingsMenu({ S }) {
   const [open, setOpen] = useState(false);
   const wd = !!S.settings.workdays;
   const opt = (v, t, sub) => (
-    <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '6px 4px', cursor: S.canEdit ? 'pointer' : 'default', fontSize: 13 }}>
-      <input type="radio" name="wd" checked={wd === v} disabled={!S.canEdit || !S.canAdmin} onChange={() => S.setSetting({ workdays: v })} style={{ marginTop: 3 }} />
+    <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', padding: '6px 4px', cursor: S.canAdmin ? 'pointer' : 'default', fontSize: 13 }}>
+      <input type="radio" name="wd" checked={wd === v} disabled={!S.canAdmin} onChange={() => S.setSetting({ workdays: v })} style={{ marginTop: 3 }} />
       <span>{t}<div style={{ fontSize: 11, color: V.muted2 }}>{sub}</div></span>
     </label>
   );
@@ -2115,7 +2126,8 @@ function SettingsMenu({ S }) {
 /* ============================================================
    帳號：登入／註冊／待核准／帳號管理（Supabase Auth）
    ============================================================ */
-const ROLE_LABEL = { pending: '待核准／停用', viewer: '只能看', editor: '可編輯', admin: '管理員' };
+const ROLE_LABEL = { pending: '待核准／停用', viewer: '只能看', engineer: '工程師', planner: 'Planner', admin: '管理員' };
+const ROLE_HINT = { pending: '看不到資料', viewer: '全部只能看', engineer: '改工程清單、進度紀錄；生產排程只能看', planner: '改機台生產排程；工程清單只能看', admin: '全部都能改，含帳號、成員、機台、設定' };
 const authErr = (e) => {
   const m = (e && e.message) || '';
   if (/Invalid login credentials/i.test(m)) return 'email 或密碼錯誤。';
@@ -2216,6 +2228,7 @@ function AccountsPage({ sb, S, profiles, reload }) {
     <div style={{ maxWidth: 1000, display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div style={{ fontSize: 13, color: V.muted, lineHeight: 1.7 }}>
         同事在登入頁按「註冊新帳號」後會出現在這裡，選擇權限即可核准。要停用某人，把權限改回「待核准／停用」。<br />
+        {Object.entries(ROLE_LABEL).filter(([k]) => k !== 'pending').map(([k, l]) => <span key={k} style={{ marginRight: 14 }}><b>{l}</b>：{ROLE_HINT[k]}</span>)}<br />
         顯示名稱會用在「更新者」「紀錄人」和「只看我的」，建議跟團隊成員名稱一致。
       </div>
       {err && <div style={{ fontSize: 13, color: OVER }}>{err}</div>}
@@ -2229,6 +2242,7 @@ function AccountsPage({ sb, S, profiles, reload }) {
             <span style={{ fontSize: 12, color: V.muted, overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.email}{p.id === S.profile.id ? '（你）' : ''}</span>
             <select value={p.role} onChange={(e) => setRole(p, e.target.value)} style={{ ...FSEL, height: 30, ...(p.role === 'pending' ? { borderColor: SOON.bd, color: SOON.fg } : null) }}>
               {Object.entries(ROLE_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+              {!ROLE_LABEL[p.role] && <option value={p.role}>{p.role}</option>}
             </select>
             <span style={{ fontFamily: MONO, fontSize: 11, color: V.muted2 }}>{(p.created_at || '').slice(0, 16).replace('T', ' ')}</span>
             <span style={{ fontSize: 12, color: S.owners.includes(p.name) ? 'oklch(0.45 0.1 155)' : V.faint }}>{S.owners.includes(p.name) ? '✓ ' + p.name : '（名稱不在團隊成員中）'}</span>
@@ -2248,7 +2262,7 @@ function UserMenu({ sb, S }) {
   return (
     <div style={{ position: 'relative' }}>
       <button onClick={() => setOpen((o) => !o)} style={{ ...FSEL, height: 30, display: 'flex', alignItems: 'center', gap: 6 }}>
-        <Avatar name={S.me || '?'} size={20} />{S.me}<span style={{ fontSize: 10.5, color: V.muted2 }}>{ROLE_LABEL[S.profile.role]}</span>▾
+        <Avatar name={S.me || '?'} size={20} />{S.me}<span style={{ fontSize: 10.5, color: V.muted2 }}>{ROLE_LABEL[S.role] || S.profile.role}</span>▾
       </button>
       {open && (
         <>
@@ -2291,7 +2305,7 @@ function RootSB() {
   }, [uidv]);
   if (session === undefined || (session && !profile)) return <AuthShell><div style={{ fontSize: 13, color: V.muted2 }}>連線中…</div></AuthShell>;
   if (!session) return <AuthPage sb={sb} />;
-  if (!['viewer', 'editor', 'admin'].includes(profile.role)) return <PendingPage sb={sb} profile={profile} />;
+  if (!['viewer', 'engineer', 'planner', 'editor', 'admin'].includes(profile.role)) return <PendingPage sb={sb} profile={profile} />;
   return <App sb={sb} profile={profile} />;
 }
 

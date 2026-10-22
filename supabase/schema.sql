@@ -6,25 +6,35 @@
 
 -- ---------------------------------------------------------------------
 -- 1. 帳號與角色
---    pending 待核准（看不到資料）／viewer 只能看／editor 可編輯／admin 管理員
+--    pending 待核准（看不到資料）／viewer 只能看
+--    engineer 工程師（改工程清單、進度紀錄、附件；生產排程只能看）
+--    planner  Planner（改機台生產排程；工程清單只能看）
+--    admin    管理員（全部，含成員／機台清單、共用設定、帳號管理）
 --    第一個註冊的人自動成為管理員，之後註冊的人都是「待核准」
 -- ---------------------------------------------------------------------
 create table if not exists public.profiles (
   id          uuid primary key references auth.users(id) on delete cascade,
   email       text,
   name        text not null default '',
-  role        text not null default 'pending' check (role in ('pending', 'viewer', 'editor', 'admin')),
+  role        text not null default 'pending',
   created_at  timestamptz not null default now()
 );
+
+-- 角色清單（舊版的 editor 一律轉成 engineer）
+alter table public.profiles drop constraint if exists profiles_role_check;
+update public.profiles set role = 'engineer' where role = 'editor';
+alter table public.profiles add constraint profiles_role_check check (role in ('pending', 'viewer', 'engineer', 'planner', 'admin'));
 
 create or replace function public.app_role() returns text
 language sql stable security definer set search_path = public as $$
   select coalesce((select role from public.profiles where id = auth.uid()), 'none');
 $$;
 create or replace function public.can_read() returns boolean
-language sql stable as $$ select public.app_role() in ('viewer', 'editor', 'admin') $$;
-create or replace function public.can_write() returns boolean
-language sql stable as $$ select public.app_role() in ('editor', 'admin') $$;
+language sql stable as $$ select public.app_role() in ('viewer', 'engineer', 'planner', 'admin') $$;
+create or replace function public.can_eng() returns boolean
+language sql stable as $$ select public.app_role() in ('engineer', 'admin') $$;
+create or replace function public.can_plan() returns boolean
+language sql stable as $$ select public.app_role() in ('planner', 'admin') $$;
 create or replace function public.is_admin() returns boolean
 language sql stable as $$ select public.app_role() = 'admin' $$;
 
@@ -167,31 +177,30 @@ create trigger stamp_updated_by before insert or update on public.prod_plans
   for each row execute function public.stamp_updated_by();
 
 -- ---------------------------------------------------------------------
--- 3. 權限（RLS）：核准後才看得到；editor／admin 才能改；共用設定只有 admin 能改
+-- 3. 權限（RLS）：核准後才看得到；
+--    工程清單／紀錄／附件 → 工程師、管理員；生產排程 → Planner、管理員；成員／機台／設定 → 管理員
 -- ---------------------------------------------------------------------
 do $$
-declare t text;
+declare t text; w text;
 begin
   foreach t in array array['members', 'machines', 'settings', 'eng_items', 'eng_logs', 'eng_files', 'prod_plans'] loop
+    w := case when t in ('eng_items', 'eng_logs', 'eng_files') then 'public.can_eng()'
+              when t = 'prod_plans' then 'public.can_plan()'
+              else 'public.is_admin()' end;
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "read" on public.%I', t);
     execute format('drop policy if exists "insert" on public.%I', t);
     execute format('drop policy if exists "update" on public.%I', t);
     execute format('drop policy if exists "delete" on public.%I', t);
     execute format('create policy "read" on public.%I for select to authenticated using (public.can_read())', t);
-    if t = 'settings' then
-      execute format('create policy "insert" on public.%I for insert to authenticated with check (public.is_admin())', t);
-      execute format('create policy "update" on public.%I for update to authenticated using (public.is_admin()) with check (public.is_admin())', t);
-      execute format('create policy "delete" on public.%I for delete to authenticated using (public.is_admin())', t);
-    else
-      execute format('create policy "insert" on public.%I for insert to authenticated with check (public.can_write())', t);
-      execute format('create policy "update" on public.%I for update to authenticated using (public.can_write()) with check (public.can_write())', t);
-      execute format('create policy "delete" on public.%I for delete to authenticated using (public.can_write())', t);
-    end if;
+    execute format('create policy "insert" on public.%I for insert to authenticated with check (%s)', t, w);
+    execute format('create policy "update" on public.%I for update to authenticated using (%s) with check (%s)', t, w, w);
+    execute format('create policy "delete" on public.%I for delete to authenticated using (%s)', t, w);
     execute format('revoke all on public.%I from anon', t);
     execute format('grant select, insert, update, delete on public.%I to authenticated', t);
   end loop;
 end $$;
+drop function if exists public.can_write();  -- 舊版函式，已改成 can_eng／can_plan
 
 revoke all on public.profiles from anon;
 grant select, update, delete on public.profiles to authenticated;
