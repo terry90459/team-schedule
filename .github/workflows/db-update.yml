@@ -41,8 +41,24 @@ jobs:
 
       - name: 連線測試
         run: |
-          if ! psql "$PGURL" -v ON_ERROR_STOP=1 -tAc "select 'ok'" >/dev/null; then
-            echo "::error::連不上資料庫。請確認：1) 用的是 Session pooler 的連線字串（GitHub 只支援 IPv4）；2) [YOUR-PASSWORD] 已換成資料庫密碼；3) 密碼裡有 @ : / # ? 等符號時要改成網址編碼（例如 @ → %40）；4) Supabase 專案沒有被暫停。"
+          # 先檢查常見的填錯（訊息裡不會印出連線字串）
+          case "$PGURL" in
+            *'[YOUR-PASSWORD]'*|*'YOUR-PASSWORD'*) echo "::error::連線字串裡還是「[YOUR-PASSWORD]」，請換成資料庫密碼（不要保留方括號）。"; exit 1;;
+            *'@db.'*'.supabase.co'*) echo "::error::這是 Direct connection（只支援 IPv6，GitHub 連不到）。請改用 Supabase → Connect → Session pooler 的連線字串（主機是 aws-…pooler.supabase.com）。"; exit 1;;
+            postgres://*|postgresql://*) ;;
+            *) echo "::error::連線字串要以 postgresql:// 開頭（請複製 URI 格式，不是其他格式）。"; exit 1;;
+          esac
+          # 連線失敗時把 psql 的錯誤顯示在摘要上（連線字串一律遮掉）
+          if ! err=$(psql "$PGURL" -v ON_ERROR_STOP=1 -tAc "select 'ok'" 2>&1 >/dev/null); then
+            msg=$(printf '%s' "$err" | sed -E 's#postgres(ql)?://[^ "]*#<連線字串>#g' | tr '\n' ' ' | cut -c1-400)
+            case "$err" in
+              *'password authentication failed'*) hint='密碼不對：請確認是「資料庫密碼」（不是 Supabase 登入密碼），可在 Project Settings → Database 重設；密碼裡有 @ : / # ? % 等符號要改成網址編碼（例如 @ → %40）。';;
+              *'Tenant or user not found'*) hint='使用者名稱不對：Session pooler 的使用者要是「postgres.專案代碼」，請整串重新複製。';;
+              *'could not translate host name'*|*'Network is unreachable'*|*'timeout'*) hint='連不到主機：請確認用的是 Session pooler 的連線字串、專案沒有被暫停。';;
+              *) hint='請確認是 Session pooler 的 URI 連線字串，且密碼正確。';;
+            esac
+            echo "::error::連不上資料庫：$msg"
+            echo "::error::$hint"
             exit 1
           fi
           echo "目前資料庫版本：$(psql "$PGURL" -tAc 'select public.schema_version()' 2>/dev/null || echo '（舊版，沒有版本函式）')"
