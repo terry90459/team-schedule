@@ -7,7 +7,7 @@ import { DIM, FOCUS_BAR, GANTT_LW, fitDW, focusHint, useBoxW, useFocus } from '.
 
 /* 工程排程甘特圖（時程圖 → 工程排程；客戶帳號在工程清單切換）
    cust：客戶帳號——不顯示優先度（最優先紅點、提示文字） */
-function Gantt({ D, picked, setPicked, cust }) {
+function Gantt({ D, picked, setPicked, cust, onOpen }) {
   const { rows, names, today } = D;
   const anyPicked = Object.values(picked).some(Boolean);
   const [by, setBy] = useState('machine');
@@ -93,7 +93,7 @@ function Gantt({ D, picked, setPicked, cust }) {
               <div style={{ gridColumn: '2 / -1' }} />
             </div>
             {g.rows.map((r) => (
-              <div key={r.id} onClick={() => F.row(g.name || 'none', r.id)} style={{ display: 'grid', gridTemplateColumns: gCols, gridTemplateRows: '40px', borderBottom: `1px solid ${V.line}`, width: 'max-content', minWidth: '100%', cursor: 'pointer', boxShadow: F.rOn(r.id) ? FOCUS_BAR : undefined, ...(F.rDim(g.name || 'none', r.id) ? DIM : null) }}>
+              <div key={r.id} title="點一下開啟詳情" onClick={() => { if (!F.rOn(r.id)) F.row(g.name || 'none', r.id); if (onOpen) onOpen(r.id); }} style={{ display: 'grid', gridTemplateColumns: gCols, gridTemplateRows: '40px', borderBottom: `1px solid ${V.line}`, width: 'max-content', minWidth: '100%', cursor: 'pointer', boxShadow: F.rOn(r.id) ? FOCUS_BAR : undefined, ...(F.rDim(g.name || 'none', r.id) ? DIM : null) }}>
                 <div style={{ gridRow: 1, gridColumn: 1, position: 'sticky', left: 0, zIndex: 2, background: V.surface, padding: '0 14px 0 44px', display: 'flex', flexDirection: 'column', justifyContent: 'center', borderRight: `1px solid ${V.line3}`, minWidth: 0 }}>
                   <span style={{ fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.item}</span>
                   <span style={{ fontFamily: MONO, fontSize: 10, color: V.faint }}>{r.machineLabel}</span>

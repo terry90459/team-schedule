@@ -40,8 +40,9 @@ function useFocus() {
 const FOCUS_BAR = 'inset 4px 0 0 var(--accent)';
 const focusHint = (F) => F.f
   ? <button onClick={F.clear} style={{ border: `1px solid ${V.line3}`, background: V.surface, borderRadius: 6, padding: '2px 8px', fontSize: 11, cursor: 'pointer', color: V.ink2 }}>✕ 取消重點（Esc）</button>
-  : <span style={{ fontSize: 10, color: V.faint }}>點機台或項目可重點顯示</span>;
-function DailyGrid({ groups: allGroups, headLabel, rangeKey }) {
+  : <span style={{ fontSize: 10, color: V.faint }}>點項目開啟詳情・點機台重點顯示</span>;
+// onOpen(列 id)：列 id 是 'e' + 工作 id 或 'p' + 排程 id
+function DailyGrid({ groups: allGroups, headLabel, rangeKey, onOpen }) {
   const F = useFocus();
   const R = useRange(rangeKey);
   const today = new Date(); today.setHours(0, 0, 0, 0);
@@ -90,7 +91,7 @@ function DailyGrid({ groups: allGroups, headLabel, rangeKey }) {
               </div>
             </div>
             {g.rows.map((r) => (
-              <div key={r.id} onClick={() => F.row(g.key, r.id)} style={{ display: 'flex', height: 42, borderBottom: `1px solid ${V.line}`, cursor: 'pointer', boxShadow: F.rOn(r.id) ? FOCUS_BAR : undefined, ...(F.rDim(g.key, r.id) ? DIM : null) }}>
+              <div key={r.id} onClick={() => { if (!F.rOn(r.id)) F.row(g.key, r.id); if (onOpen) onOpen(r.id); }} style={{ display: 'flex', height: 42, borderBottom: `1px solid ${V.line}`, cursor: 'pointer', boxShadow: F.rOn(r.id) ? FOCUS_BAR : undefined, ...(F.rDim(g.key, r.id) ? DIM : null) }}>
                 <div style={{ width: LW, flex: 'none', position: 'sticky', left: 0, zIndex: 2, background: V.surface, padding: '0 14px 0 20px', display: 'flex', flexDirection: 'column', justifyContent: 'center', borderRight: `1px solid ${V.line3}`, minWidth: 0 }}>
                   <span style={{ fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.tag && <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, marginRight: 6, background: r.tagBg, color: r.tagFg, verticalAlign: 1 }}>{r.tag}</span>}{r.hw && <span style={{ fontSize: 10, padding: '1px 5px', borderRadius: 3, marginRight: 6, background: 'oklch(0.62 0.15 50)', color: '#fff', verticalAlign: 1 }}>HW</span>}{r.label}</span>
                   <span style={{ fontFamily: MONO, fontSize: 10, color: V.faint, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{r.sub}</span>
@@ -120,7 +121,7 @@ function PlanTimeline({ plans, machineNames }) {
 }
 
 // 生產排程／工程＋生產（依機台）；mode 由「時程圖」頁決定
-function ComboPage({ S, D, mode, cust }) {
+function ComboPage({ S, D, mode, cust, onOpen }) {
   const [mf, setMf] = useState('');
   const [hwOnly, setHwOnly] = useState(false);
   const showE = mode !== 'plan', showP = mode !== 'eng';
@@ -153,7 +154,7 @@ function ComboPage({ S, D, mode, cust }) {
         </div>
       </div>
       {((showE && noDateE > 0) || (showP && noDateP > 0)) && <div style={{ fontSize: 12, color: V.muted2 }}>{showE && noDateE > 0 ? `${noDateE} 筆工程項目日期未定，只列在清單、不畫橫條　` : ''}{showP && noDateP > 0 ? `${noDateP} 筆生產排程日期未填或有誤，未顯示` : ''}</div>}
-      <DailyGrid groups={groups} headLabel="機台 / 項目" rangeKey="combo" />
+      <DailyGrid groups={groups} headLabel="機台 / 項目" rangeKey="combo" onOpen={onOpen} />
     </div>
   );
 }
@@ -165,7 +166,8 @@ export { GANTT_LW, MIN_DW, useBoxW, fitDW, DIM, useFocus, FOCUS_BAR, focusHint, 
    ============================================================ */
 const TL_MODES = [['eng', '工程排程'], ['plan', '生產排程'], ['both', '工程＋生產']];
 // cust：客戶帳號（不顯示優先度、撞機台、HW），也沒有「工程＋生產」合併檢視
-function TimelinePage({ S, D, mode, setMode, picked, setPicked, Gantt, cust }) {
+function TimelinePage({ S, D, mode, setMode, picked, setPicked, Gantt, cust, onOpenRow, onOpenPlan }) {
+  const openAny = (rid) => (rid[0] === 'e' ? onOpenRow : onOpenPlan)(rid.slice(1));
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -175,8 +177,8 @@ function TimelinePage({ S, D, mode, setMode, picked, setPicked, Gantt, cust }) {
         <span className="muted" style={{ fontSize: 12 }}>{mode === 'eng' ? '工程清單的工作，依截止日與預計天數畫出' : mode === 'plan' ? '機台生產排程' : '同一台機台的工程工作與生產排程放在一起，方便看有沒有撞期'}</span>
       </div>
       {mode === 'eng'
-        ? (D.rows.length ? <Gantt D={D} picked={picked} setPicked={setPicked} cust={cust} /> : <div style={{ background: V.surface, border: `1px dashed ${V.line3}`, borderRadius: 10, padding: 48, textAlign: 'center', fontSize: 14, color: V.muted2 }}>工程清單中還沒有資料。</div>)
-        : <ComboPage S={S} D={D} mode={mode} cust={cust} />}
+        ? (D.rows.length ? <Gantt D={D} picked={picked} setPicked={setPicked} cust={cust} onOpen={onOpenRow} /> : <div style={{ background: V.surface, border: `1px dashed ${V.line3}`, borderRadius: 10, padding: 48, textAlign: 'center', fontSize: 14, color: V.muted2 }}>工程清單中還沒有資料。</div>)
+        : <ComboPage S={S} D={D} mode={mode} cust={cust} onOpen={openAny} />}
     </div>
   );
 }

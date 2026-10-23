@@ -170,7 +170,7 @@ label.mi input{margin:0}
 /* ================= V2 外框：左側欄＋主內容＋右側詳情 ================= */
 body{font-size:13.5px}
 .shell{display:flex;height:100%;min-width:0}
-.side{width:228px;flex:none;background:var(--surface2);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:14px 10px 10px;gap:2px;min-height:0;overflow-y:auto}
+.side{width:228px;flex:none;background:var(--surface2);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:14px 10px 10px;gap:2px;min-height:0;overflow-y:auto;overflow-x:hidden}
 .brand{display:flex;align-items:center;gap:10px;padding:2px 8px 14px;font-weight:700;font-size:14.5px;white-space:nowrap}
 .brand .logo{width:28px;height:28px;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:13px;flex:none}
 .scope-box{margin:0 2px 10px;display:flex;flex-direction:column;gap:4px}

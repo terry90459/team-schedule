@@ -121,16 +121,23 @@ function usePresence(sb, profile, page) {
 const PAGE_LABEL = { mine: '我的工作', overview: '總覽', daily: '每日', timeline: '時程圖', combo: '時程圖', list: '工程清單', plan: '生產排程', board: '卡片看板', accounts: '管理' };
 const since = (t) => { if (!t) return ''; const m = Math.max(0, Math.round((Date.now() - new Date(t).getTime()) / 60000)); return m < 1 ? '剛剛' : m < 60 ? `${m} 分鐘前` : `${Math.floor(m / 60)} 小時前`; };
 
-/* 側欄底部的小彈出面板（往上開） */
+/* 側欄底部的小彈出面板：往上開、固定定位（比側欄寬也不會被裁掉） */
 function SidePop({ trigger, children, width = 280 }) {
-  const [open, setOpen] = useState(false);
-  useEffect(() => { if (!open) return; const k = (e) => { if (e.key === 'Escape') setOpen(false); }; window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k); }, [open]);
+  const [pos, setPos] = useState(null);
+  const box = useRef(null);
+  const close = () => setPos(null);
+  const toggle = () => {
+    if (pos) return close();
+    const r = box.current.getBoundingClientRect(), w = Math.min(width, innerWidth - 16);
+    setPos({ left: Math.max(8, Math.min(r.left, innerWidth - w - 8)), bottom: innerHeight - r.top + 6, width: w, maxHeight: r.top - 14 });
+  };
+  useEffect(() => { if (!pos) return; const k = (e) => { if (e.key === 'Escape') close(); }; window.addEventListener('keydown', k); window.addEventListener('resize', close); return () => { window.removeEventListener('keydown', k); window.removeEventListener('resize', close); }; }, [pos]);
   return (
-    <div style={{ position: 'relative' }}>
-      {trigger(() => setOpen((o) => !o), open)}
-      {open && <>
-        <div className="pop-veil" onClick={() => setOpen(false)} />
-        <div className="pop" role="dialog" style={{ bottom: 'calc(100% + 6px)', left: 0, width, padding: 8, gap: 2 }}>{typeof children === 'function' ? children(() => setOpen(false)) : children}</div>
+    <div ref={box}>
+      {trigger(toggle, !!pos)}
+      {pos && <>
+        <div className="pop-veil" onClick={close} />
+        <div className="pop pop-fixed" role="dialog" style={{ ...pos, overflow: 'auto', padding: 8, gap: 2 }}>{typeof children === 'function' ? children(close) : children}</div>
       </>}
     </div>
   );
@@ -302,7 +309,7 @@ function App({ sb = null, profile = null }) {
         {view === 'plan' && <PlanListPage S={S} sel={sel && sel.kind === 'plan' ? sel.id : null} open={openPlan} showScope={showScope} head={head} goTimeline={goTimeline} />}
         {view === 'timeline' && <>
           {head({ title: '時程圖', sub: '工程工作依截止日與預計天數往回推；生產排程依開始、結束日' })}
-          <div className="page-body"><TimelinePage S={S} D={D} mode={cu && tlMode === 'both' ? 'eng' : tlMode} setMode={setTlMode} picked={picked} setPicked={setPicked} Gantt={Gantt} cust={cu} /></div>
+          <div className="page-body"><TimelinePage S={S} D={D} mode={cu && tlMode === 'both' ? 'eng' : tlMode} setMode={setTlMode} picked={picked} setPicked={setPicked} Gantt={Gantt} cust={cu} onOpenRow={openRow} onOpenPlan={openPlan} /></div>
         </>}
         {view === 'overview' && <>
           {head({ title: '總覽', sub: `${S.rows.length} 件工作・${S.plans.length} 筆排程` })}
