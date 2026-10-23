@@ -5,8 +5,9 @@ import { RangeBar, barTone, clip, useRange } from '../data/derive';
 import { Avatar, lineBtn } from '../ui/common';
 import { DIM, FOCUS_BAR, GANTT_LW, fitDW, focusHint, useBoxW, useFocus } from '../plan/timeline';
 
-/* 工程排程甘特圖（時程圖 → 工程排程） */
-function Gantt({ D, picked, setPicked }) {
+/* 工程排程甘特圖（時程圖 → 工程排程；客戶帳號在工程清單切換）
+   cust：客戶帳號——不顯示優先度（最優先紅點、提示文字） */
+function Gantt({ D, picked, setPicked, cust }) {
   const { rows, names, today } = D;
   const anyPicked = Object.values(picked).some(Boolean);
   const [by, setBy] = useState('machine');
@@ -38,9 +39,9 @@ function Gantt({ D, picked, setPicked }) {
           cutL: c && c.cutL, cutR: c && c.cutR, soon: r.soon,
           id: r.id, tentative, item: r.item || '（未命名）',
           machineLabel: tentative ? '日期未定' : (by === 'owner' ? (r.machine ? '機台 ' + r.machine : '') : (r.owner === UN ? '未指派' : r.owner)),
-          span: `${a + 2} / ${b + 3}`, days: r.dayN, status: r.status, urgent: r.priority === '最優先',
+          span: `${a + 2} / ${b + 3}`, days: r.dayN, status: r.status, urgent: !cust && r.priority === '最優先',
           bg: tone.bg, fg: tone.bd, textFg: tone.fg,
-          tip: `${r.item}｜${r.owner === UN ? '未指派' : r.owner}｜${r.priority}｜${tentative ? '日期未定' : '截止 ' + r.due + (r.over ? '（逾期）' : r.soon ? '（3 天內到期）' : '')}`,
+          tip: `${r.item}｜${r.owner === UN ? '未指派' : r.owner}｜${cust ? '' : r.priority + '｜'}${tentative ? '日期未定' : '截止 ' + r.due + (r.over ? '（逾期）' : r.soon ? '（3 天內到期）' : '')}`,
         };
       }),
     };

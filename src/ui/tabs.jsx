@@ -84,8 +84,8 @@ function TabAdmin({ S }) {
     </div>
   );
 }
-// 客戶帳號看得到的欄位（工程清單 HEADS／生產排程 PHEADS 的索引）
-const CUST_ENG_COLS = new Set([1, 2, 3, 4, 5, 6, 9]);
+// 客戶帳號看得到的欄位（工程清單 HEADS／生產排程 PHEADS 的索引）；7＝預計天數（v4 起開放）
+const CUST_ENG_COLS = new Set([1, 2, 3, 4, 5, 6, 7, 9]);
 const CUST_PLAN_COLS = new Set([0, 1, 2, 4, 5, 6]);
 const visCols = (S, cols, set) => (S.isCust ? cols.filter((_, i) => set.has(i)) : cols);
 

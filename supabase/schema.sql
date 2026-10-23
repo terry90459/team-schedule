@@ -509,8 +509,9 @@ grant execute on function public.keepalive() to anon, authenticated;
 -- 9. 客戶分頁與可見範圍
 --    · 工程清單、生產排程的每一筆都屬於一個分頁（customer_id），由所在分頁自動決定
 --    · 管理員：看得到全部；只能看／工程師／Planner：profiles.tabs 是 null = 全部，否則只限這些分頁
---    · 客戶帳號（role = customer）：一律唯讀，只能透過 cust_items / cust_plans 讀自己分頁的部分欄位；
---      基本資料表、進度紀錄、附件、成員、機台、設定都讀不到
+--    · 客戶帳號（role = customer）：一律唯讀，只能透過 cust_items / cust_plans 讀自己分頁的部分欄位，
+--      以及 cust_settings（只有「日曆天／工作天」，畫工程時程圖用）；
+--      基本資料表、進度紀錄、附件、成員、機台都讀不到
 --    （public repo：第一次建立時分頁叫「客戶 1」，請在網頁上改成實際客戶名稱）
 -- ---------------------------------------------------------------------
 do $$
@@ -617,18 +618,23 @@ begin
 end $$;
 
 -- 客戶帳號專用：只有開放的欄位、只有自己的分頁、只能讀
---   工程清單：工作項目、負責人、客戶 Owner、機台、狀態、截止日、備註（不含優先度、天數、更新者、紀錄、附件）
+--   工程清單：工作項目、負責人、客戶 Owner、機台、狀態、截止日、備註、預計天數（不含優先度、更新者、紀錄、附件）
 --   生產排程：機台、Group、產品、開始日、結束日（不含 HW、備註、更新者）
+--   （create or replace view 只能在最後面加欄位：days 是 v4 加的，要放在 customer_id 後面）
 create or replace view public.cust_items as
-  select i.id, i.item, i.owner, i.cust_owner, i.machine, i.status, i.due, i.remark, i.sort_order, i.customer_id
+  select i.id, i.item, i.owner, i.cust_owner, i.machine, i.status, i.due, i.remark, i.sort_order, i.customer_id, i.days
     from public.eng_items i join public.customers c on c.id = i.customer_id and not c.internal
    where public.app_role() = 'customer' and i.customer_id = any(coalesce(public.my_tabs(), '{}'));
 create or replace view public.cust_plans as
   select p.id, p.machine, p.grp, p.product, p.start_date, p.end_date, p.customer_id
     from public.prod_plans p join public.customers c on c.id = p.customer_id and not c.internal
    where public.app_role() = 'customer' and p.customer_id = any(coalesce(public.my_tabs(), '{}'));
-revoke all on public.cust_items, public.cust_plans from public, anon;
-grant select on public.cust_items, public.cust_plans to authenticated;
+-- 天數怎麼算（日曆天／工作天）：客戶的工程時程圖要用同一個算法往回推開始日
+create or replace view public.cust_settings as
+  select s.id, s.workdays from public.settings s
+   where public.app_role() = 'customer';
+revoke all on public.cust_items, public.cust_plans, public.cust_settings from public, anon;
+grant select on public.cust_items, public.cust_plans, public.cust_settings to authenticated;
 
 -- 即時同步加入分頁清單
 do $$
@@ -706,6 +712,6 @@ grant execute on function public.restore_backup(jsonb) to authenticated;
 --    （放在檔案最後：前面全部執行成功才會更新版本號）
 -- ---------------------------------------------------------------------
 create or replace function public.schema_version() returns int
-language sql immutable as $$ select 3 $$;
+language sql immutable as $$ select 4 $$;
 revoke execute on function public.schema_version() from public;
 grant execute on function public.schema_version() to anon, authenticated;

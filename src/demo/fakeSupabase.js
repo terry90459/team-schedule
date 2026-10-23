@@ -36,8 +36,9 @@ export function createFakeSupabase(seed) {
       case 'eng_items': case 'prod_plans': return canRead() ? db[t].filter((x) => canTab(x.customer_id)) : [];
       case 'eng_logs': case 'eng_files': { const ids = new Set(visible('eng_items').map((x) => x.id)); return db[t].filter((x) => ids.has(x.row_id)); }
       case 'customers': return r === 'customer' ? db.customers.filter((c) => custTabs().includes(c.id) && !c.internal) : db.customers.filter((c) => canTab(c.id));
-      case 'cust_items': return db.eng_items.filter((x) => custTabs().includes(x.customer_id) && !isInternalTab(x.customer_id)).map((x) => pick(x, ['id', 'item', 'owner', 'cust_owner', 'machine', 'status', 'due', 'remark', 'sort_order', 'customer_id']));
+      case 'cust_items': return db.eng_items.filter((x) => custTabs().includes(x.customer_id) && !isInternalTab(x.customer_id)).map((x) => pick(x, ['id', 'item', 'owner', 'cust_owner', 'machine', 'status', 'due', 'remark', 'sort_order', 'customer_id', 'days']));
       case 'cust_plans': return db.prod_plans.filter((x) => custTabs().includes(x.customer_id) && !isInternalTab(x.customer_id)).map((x) => pick(x, ['id', 'machine', 'grp', 'product', 'start_date', 'end_date', 'customer_id']));
+      case 'cust_settings': return role() === 'customer' ? db.settings.map((x) => pick(x, ['id', 'workdays'])) : [];
       case 'members': case 'machines': case 'settings': return canRead() ? db[t] : [];
       case 'profiles': return r === 'admin' ? db.profiles : db.profiles.filter((p) => p.id === me);
       case 'signup_allow': return r === 'admin' ? db.signup_allow : [];
@@ -140,7 +141,7 @@ export function createFakeSupabase(seed) {
 
   const rpc = async (fn, a = {}) => {
     switch (fn) {
-      case 'schema_version': return { data: 3, error: null };
+      case 'schema_version': return { data: 4, error: null };
       case 'email_allowed': { const e = String(a.e || '').toLowerCase(); return { data: !db.signup_allow.length || db.signup_allow.some((x) => x.pattern === e || x.pattern === '@' + e.split('@')[1]), error: null }; }
       case 'rename_member': {
         if (role() !== 'admin') return err('只有管理員可以改成員名稱');

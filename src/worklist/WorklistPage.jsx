@@ -8,6 +8,7 @@ import { WorkCard } from './WorkCard';
 import { sortLogs } from './logs';
 import { ImportModal, exportCSV } from './io';
 import { CUST_ENG_COLS } from '../ui/tabs';
+import { Gantt } from '../dashboard/Gantt';
 
 // 要顯示的欄位（記在各人瀏覽器）；客戶帳號固定只看開放的欄位
 function useShown(cu) {
@@ -30,6 +31,8 @@ function WorklistPage({ S, D, openLogs, goTimeline }) {
   const setMine = (v) => { setMineState(v); lsSet('list.mine', v ? '1' : '0'); };
   const [fOwner, setFOwner] = useState(''), [fMachine, setFMachine] = useState(''), [fPrio, setFPrio] = useState('');
   const [importing, setImporting] = useState(false);
+  // 客戶帳號沒有「時程圖」頁，在這裡切換列表／工程時程圖
+  const [custView, setCustView] = useState('list'), [picked, setPicked] = useState({});
   const [cols, startResize, resetCol] = useCols(COLS_KEY, COLW0, COLMIN, [0, COLW0.length - 1]);
   const logsByRow = useMemo(() => { const m = new Map(); sortLogs(S.logs).forEach((l) => { if (!m.has(l.rowId)) m.set(l.rowId, []); m.get(l.rowId).push(l); }); return m; }, [S.logs]);
   const [dragId, setDragId] = useState(null);
@@ -37,6 +40,7 @@ function WorklistPage({ S, D, openLogs, goTimeline }) {
   const scroller = useRef(null);
   const ro = !S.canEdit, cu = S.isCust;
   const mine = !cu && mineOn && !!S.me;
+  const ganttOn = cu && custView === 'gantt';
   const C = useShown(cu);
   const ownerList = cu ? [...new Set(S.rows.map((r) => r.owner).filter(Boolean))].sort(byName) : S.owners;
 
@@ -181,10 +185,12 @@ function WorklistPage({ S, D, openLogs, goTimeline }) {
           </Dropdown>
         )}
         {!cu && <button className="btn btn-sm" onClick={() => goTimeline('eng')} title="到「時程圖」看工程排程">📅 時程圖</button>}
+        {cu && <div className="seg" role="group" aria-label="顯示方式">{[['list', '列表'], ['gantt', '時程圖']].map(([k, l]) => <button key={k} className={custView === k ? 'on' : ''} aria-pressed={custView === k} onClick={() => setCustView(k)}>{l}</button>)}</div>}
         {!cu && <button className="btn btn-primary" disabled={ro} onClick={addRow}>＋ 新增一筆</button>}
       </div>
 
-      <div ref={scroller} style={{ flex: 1, overflow: 'auto', padding: '12px 24px 40px' }}>
+      {ganttOn && <div style={{ flex: 1, overflow: 'auto', padding: '12px 24px 40px' }}>{D.rows.length ? <Gantt D={D} picked={picked} setPicked={setPicked} cust /> : <div className="muted" style={{ padding: 40, textAlign: 'center', fontSize: 13 }}>目前沒有資料。</div>}</div>}
+      <div ref={scroller} style={{ flex: 1, overflow: 'auto', padding: '12px 24px 40px', display: ganttOn ? 'none' : undefined }}>
         <div style={{ minWidth: minW, display: 'flex', flexDirection: 'column', gap: 10 }}>
           <div className="tbl">
           <div className="tbl-head" style={{ gridTemplateColumns: tpl }}>

@@ -13,12 +13,13 @@ const RES = ['rows', 'plans', 'logs', 'files', 'members', 'machines', 'settings'
 
 // ---------- Supabase ----------
 // 這版網頁需要的資料庫版本（= supabase/schema.sql 最後的 schema_version()）；改 schema 時兩邊一起加 1
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 const SCHEMA_URL = 'https://github.com/terry90459/team-schedule/blob/main/supabase/schema.sql';
 const SB_TABLE = { rows: 'eng_items', plans: 'prod_plans', logs: 'eng_logs', files: 'eng_files', members: 'members', machines: 'machines', settings: 'settings', customers: 'customers' };
 // 客戶帳號：只讀資料庫開放的檢視表（部分欄位、只有自己的分頁），其他資源一律不讀
-const SB_CUST_VIEW = { rows: 'cust_items', plans: 'cust_plans' };
-const CUST_RES = new Set(['rows', 'plans', 'customers']);
+// settings → cust_settings 只有「日曆天／工作天」（v4 起，畫工程時程圖用）
+const SB_CUST_VIEW = { rows: 'cust_items', plans: 'cust_plans', settings: 'cust_settings' };
+const CUST_RES = new Set(['rows', 'plans', 'customers', 'settings']);
 // 前端欄位 → 資料庫欄位（沒列出的同名）
 const SB_RENAME = {
   rows: { custOwner: 'cust_owner', order: 'sort_order', updatedBy: 'updated_by', customer: 'customer_id' },
@@ -68,7 +69,11 @@ function supabaseBackend(sb, onLive, cust) {
         const all = [];
         for (let from = 0; ; from += 1000) {
           const { data, error } = await sb.from(T).select('*').range(from, from + 999);
-          if (error) { onErr && onErr(error); return; }
+          if (error) {
+            // 資料庫還沒更新到 v4（沒有 cust_settings）：當作日曆天，不跳錯誤
+            if (cust && res === 'settings') { cb([]); return; }
+            onErr && onErr(error); return;
+          }
           all.push(...data);
           if (data.length < 1000) break;
         }
