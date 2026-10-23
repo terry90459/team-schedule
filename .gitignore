@@ -4,7 +4,7 @@ dist/
 .env.*
 *.local
 # 真實資料一律不進 repo
-data/
+/data/
 *.csv
 *.xlsx
 *.stdf
