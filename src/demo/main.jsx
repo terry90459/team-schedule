@@ -16,9 +16,9 @@ function DemoBar({ fake, onSwitch, onReset }) {
   const me = list.find((p) => p.id === fake._demo.me());
   const desc = (p) => `${p.is_owner ? '★ 最高管理員' : ROLE[p.role] || p.role}${STAT[p.status] ? '・' + STAT[p.status] : ''}${p.role !== 'admin' && p.tabs ? '・只看 ' + p.tabs.length + ' 個分頁' : ''}`;
   return (
-    <div style={{ position: 'fixed', left: 12, bottom: 12, zIndex: 100, fontSize: 12.5 }}>
+    <div style={{ position: 'fixed', top: 8, left: '50%', transform: 'translateX(-50%)', zIndex: 100, fontSize: 12.5, display: 'flex', flexDirection: 'column-reverse', alignItems: 'center' }}>
       {open && (
-        <div style={{ marginBottom: 6, width: 300, background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.2)', padding: 6 }}>
+        <div style={{ marginTop: 6, width: 300, background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.2)', padding: 6 }}>
           <div style={{ padding: '6px 8px', color: V.muted2, fontSize: 11.5, lineHeight: 1.6 }}>切換成不同身分，看看每種帳號看到的畫面。資料都是假的、只存在這個分頁，重新整理就恢復原狀。</div>
           {list.map((p) => (
             <button key={p.id} onClick={() => { setOpen(false); onSwitch(p.id); }}
@@ -32,8 +32,8 @@ function DemoBar({ fake, onSwitch, onReset }) {
         </div>
       )}
       <button onClick={() => setOpen((o) => !o)}
-        style={{ display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 14px', borderRadius: 17, border: 'none', cursor: 'pointer', background: 'oklch(0.55 0.15 300)', color: '#fff', boxShadow: '0 6px 20px rgba(0,0,0,0.25)', fontWeight: 500 }}>
-        預覽版・假資料<span style={{ opacity: 0.8 }}>｜目前身分：{me ? me.name : '未登入'}</span>▴
+        style={{ display: 'flex', alignItems: 'center', gap: 8, height: 26, padding: '0 10px', fontSize: 12, borderRadius: 13, border: 'none', cursor: 'pointer', background: 'oklch(0.55 0.15 300)', color: '#fff', boxShadow: '0 6px 20px rgba(0,0,0,0.25)', fontWeight: 500 }}>
+        預覽版<span style={{ opacity: 0.85 }}>{me ? me.name : '未登入'}</span>▾
       </button>
     </div>
   );

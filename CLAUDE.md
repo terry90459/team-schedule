@@ -20,27 +20,31 @@ node dev-test/smoke.cjs                                 # 快速測試（要先�
 ```
 正式版由 GitHub Actions 帶入 `SUPABASE_URL`／`SUPABASE_KEY` 建置，本機不需要。
 
-## 程式結構（src/）
+## 程式結構（src/）——V2 版面（2026-10，分支 V2-test）
+外框是「左側欄＋主內容＋右側詳情」：側欄切換頁面與範圍（全部客戶／某個分頁），任何頁面點一筆工作或排程，都在右側詳情面板修改。
+
 | 資料夾 | 內容 |
 |---|---|
 | `lib/` | `config`（Supabase 連線）、`theme`（顏色、狀態常數）、`util`（日期、**台灣國定假日 TW_OFF/TW_WORK**、排序等小工具） |
-| `data/` | `backend`（Supabase／本機兩種後端，欄位對照 SB_COLS）、`store`（`useStore` 資料層，畫面只透過它存取資料）、`derive`（儀表板衍生資料、甘特圖區間） |
-| `ui/` | `common`（共用按鈕、輸入框、欄寬）、`menu`（下拉選單 Dropdown／MenuItem、ⓘ 說明 InfoToggle）、`tabs`（客戶分頁列、分頁管理 TabAdmin、客戶可見欄位 CUST_ENG_COLS/CUST_PLAN_COLS） |
-| `worklist/` | 工程清單頁、每一列（WorkCard，欄位見 `parts.jsx` 的 HEADS／COL_DEFAULT）、工作詳情抽屜（`logs.jsx`）、附件（`files.jsx`）、匯出 CSV／Excel 匯入、成員面板 |
-| `dashboard/` | 總覽、工程排程甘特圖（時程圖頁使用）、卡片看板 |
-| `plan/` | 生產排程頁、每一列、時程圖頁 TimelinePage（工程／生產／合併三種）與 DailyGrid |
-| `daily/` | 每日頁 |
-| `account/` | 登入／註冊、⚙ 管理頁 ManagePage（帳號／成員／機台／客戶分頁）、帳號列表（可見分頁、允許註冊名單、備份還原） |
-| `app/` | App 外框（分頁、客戶模式）、右上角設定、線上人數、資料庫版本提醒 |
+| `data/` | `backend`（Supabase／本機兩種後端，欄位對照 SB_COLS）、`store`（`useStore` 資料層，畫面只透過它存取資料）、`derive`（衍生資料、甘特圖區間） |
+| `ui/` | `common`（CellText、Avatar…）、`menu`（Dropdown／MenuItem、InfoToggle）、`icons`（側欄圖示）、`tabs`（分頁名稱、範圍、分頁管理 TabAdmin） |
+| `app/` | `App`（外框：側欄、範圍、頁面切換、右側詳情、版本提醒、線上人數）、`SettingsMenu`（設定面板） |
+| `home/` | `MyWork`：我的工作（工程師的首頁） |
+| `worklist/` | `ListPage`（工程清單）、`ItemRow`（一列＋狀態膠囊）、`ItemDetail`（工作詳情與進度紀錄）、`files`、`logs`（LogEntry）、`io`（匯出 CSV／Excel 匯入）、`members`、`parts`（撞機台、成員移除…） |
+| `plan/` | `PlanList`（生產排程清單＋排程詳情）、`timeline`（時程圖頁 TimelinePage、DailyGrid） |
+| `dashboard/` | 總覽統計 `Overview`、工程甘特圖 `Gantt`、看板 `Board` |
+| `daily/` | 每日（在總覽的子分頁） |
+| `account/` | 登入／註冊、管理頁 ManagePage（帳號／成員／機台／客戶分頁）、帳號列表（可見分頁、允許註冊名單、備份還原） |
 | `demo/` | 預覽版用的模擬 Supabase（`fakeSupabase.js`，要跟 schema 的權限規則保持一致）與假資料（`seed.js`） |
 
 依賴方向：`lib` → `data` → `ui` → 各頁面 → `app`。不要讓底層 import 上層。
 
-## 介面原則（2026-10 版面簡化後）
-- 給每天用的人：常用的放外面（搜尋、狀態、只看我的、新增），偶爾用的收進「篩選 ▾」「⋯ 更多」，只有管理員用的放「⚙ 管理」。
-- 工程清單預設只顯示 8 欄，其他欄位在「工作詳情」側欄；新增欄位時先想「是不是每天都要看」，不是就放側欄。
-- 新寫的介面用 `build.mjs` 裡的共用 class（`.btn` `.chip` `.seg` `.field` `.pop` `.mi` `.toolbar`…），不要再寫一大串 inline style；舊元件改到時順手換掉。
-- 1366px 寬（一般筆電）不能出現左右捲動；手機寬度至少要能切換頁面、不被裁切（smoke.cjs 有檢查）。
+## 介面原則
+- **清單只看、詳情才改**：清單上只有狀態可以直接切換，其他欄位在右側詳情修改；不要再把輸入框放回清單。
+- 首頁依角色：工程師 → 我的工作；Planner → 生產排程；管理員／只能看 → 總覽；客戶 → 工程清單。
+- 給每天用的人：常用的放外面，偶爾用的收進「篩選與分組」「⋯」，只有管理員用的放「管理」。
+- 顏色只用來表示狀態與到期／逾期；樣式用 `build.mjs` 的共用 class（`.item` `.list` `.detail` `.d-in` `.btn` `.seg` `.chip` `.tag`…），不要寫一大串 inline style。
+- 1366px 寬開著詳情也不能左右捲；1180px 以下詳情浮在上面；760px 以下側欄收進 ☰（smoke.cjs 有檢查）。
 
 ## 資料庫（supabase/schema.sql）
 - 可以重複執行、不刪資料。**改了 schema 要做三件事**：

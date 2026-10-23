@@ -120,7 +120,7 @@ function PlanTimeline({ plans, machineNames }) {
 }
 
 // 生產排程／工程＋生產（依機台）；mode 由「時程圖」頁決定
-function ComboPage({ S, D, mode }) {
+function ComboPage({ S, D, mode, cust }) {
   const [mf, setMf] = useState('');
   const [hwOnly, setHwOnly] = useState(false);
   const showE = mode !== 'plan', showP = mode !== 'eng';
@@ -129,8 +129,8 @@ function ComboPage({ S, D, mode }) {
   const NONE = '（未指定機台）';
   const mset = [...new Set([...S.machines, ...D.rows.map((r) => r.machine).filter(Boolean), ...S.plans.map((p) => p.machine).filter(Boolean)])].sort(byName);
   const keys = [...mset, ''];
-  const clashM = engPlanClash(D.rows, S.plans);
-  const engRow = (r0) => { const r = { ...r0, tentative: !r0.dueD }; return { id: 'e' + r.id, label: (clashM.has(r.id) ? '⚠ ' : '') + (r.item || '（未命名）'), sub: `${r.owner === UN ? '未指派' : r.owner}｜${r.status}｜${r.priority}${r.tentative ? '｜日期未定' : ''}${clashM.has(r.id) ? '｜與生產排程重疊' : ''}`, tag: '工程', tagBg: 'oklch(0.9 0.12 90)', tagFg: 'oklch(0.38 0.09 80)', a: r.startD ? dstr(r.startD) : '9999', bars: r.tentative ? [] : [{ a: r.startD, b: r.dueD, ...barTone(r), text: `${r.soon ? '⏰ ' : ''}${r.owner === UN ? '' : r.owner + ' · '}${r.item || ''}`, tip: `${r.item}｜${r.owner}｜${r.status}｜截止 ${r.due}${r.over ? '（逾期）' : r.soon ? '（3 天內到期）' : ''}` }] }; };
+  const clashM = cust ? new Map() : engPlanClash(D.rows, S.plans);   // 客戶看不到撞機台提醒
+  const engRow = (r0) => { const r = { ...r0, tentative: !r0.dueD }; return { id: 'e' + r.id, label: (clashM.has(r.id) ? '⚠ ' : '') + (r.item || '（未命名）'), sub: `${r.owner === UN ? '未指派' : r.owner}｜${r.status}${cust ? '' : '｜' + r.priority}${r.tentative ? '｜日期未定' : ''}${clashM.has(r.id) ? '｜與生產排程重疊' : ''}`, tag: '工程', tagBg: 'oklch(0.9 0.12 90)', tagFg: 'oklch(0.38 0.09 80)', a: r.startD ? dstr(r.startD) : '9999', bars: r.tentative ? [] : [{ a: r.startD, b: r.dueD, ...barTone(r), text: `${r.soon ? '⏰ ' : ''}${r.owner === UN ? '' : r.owner + ' · '}${r.item || ''}`, tip: `${r.item}｜${r.owner}｜${r.status}｜截止 ${r.due}${r.over ? '（逾期）' : r.soon ? '（3 天內到期）' : ''}` }] }; };
   const groups = keys.filter((m) => !mf || m === mf).map((m) => {
     const rows = [
       ...(showE ? eng.filter((r) => (r.machine || '') === m).map(engRow) : []),
@@ -146,7 +146,7 @@ function ComboPage({ S, D, mode }) {
           <option value="">全部機台</option>
           {mset.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
-        <button className="btn" aria-pressed={hwOnly} onClick={() => setHwOnly((v) => !v)} style={hwOnly ? { background: 'oklch(0.62 0.15 50)', borderColor: 'oklch(0.62 0.15 50)', color: '#fff' } : null}>只看需 HW 協助的生產排程</button>
+        {!cust && <button className="btn" aria-pressed={hwOnly} onClick={() => setHwOnly((v) => !v)} style={hwOnly ? { background: 'oklch(0.62 0.15 50)', borderColor: 'oklch(0.62 0.15 50)', color: '#fff' } : null}>只看需 HW 協助的生產排程</button>}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 14, fontSize: 12, color: V.muted, alignItems: 'center' }}>
           {showE && <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 14, height: 8, borderRadius: 2, background: 'oklch(0.82 0.14 90)' }} />工程（顏色＝狀態，橘＝3 天內到期，紅＝逾期）</span>}
           {showP && <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 14, height: 8, borderRadius: 2, background: 'oklch(0.7 0.13 150)' }} />生產（顏色＝產品 Group）</span>}
@@ -164,18 +164,19 @@ export { GANTT_LW, MIN_DW, useBoxW, fitDW, DIM, useFocus, FOCUS_BAR, focusHint, 
    P7：時程圖（原本「工程清單 → 工程排程」「複合排程」「生產排程 → 時程圖」合併成一頁）
    ============================================================ */
 const TL_MODES = [['eng', '工程排程'], ['plan', '生產排程'], ['both', '工程＋生產']];
-function TimelinePage({ S, D, mode, setMode, picked, setPicked, Gantt }) {
+// cust：客戶帳號（不顯示優先度、撞機台、HW），也沒有「工程＋生產」合併檢視
+function TimelinePage({ S, D, mode, setMode, picked, setPicked, Gantt, cust }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <div className="seg" role="group" aria-label="時程圖內容">
-          {TL_MODES.map(([k, l]) => <button key={k} className={mode === k ? 'on' : ''} aria-pressed={mode === k} onClick={() => setMode(k)}>{l}</button>)}
+          {TL_MODES.filter(([k]) => !cust || k !== 'both').map(([k, l]) => <button key={k} className={mode === k ? 'on' : ''} aria-pressed={mode === k} onClick={() => setMode(k)}>{l}</button>)}
         </div>
         <span className="muted" style={{ fontSize: 12 }}>{mode === 'eng' ? '工程清單的工作，依截止日與預計天數畫出' : mode === 'plan' ? '機台生產排程' : '同一台機台的工程工作與生產排程放在一起，方便看有沒有撞期'}</span>
       </div>
       {mode === 'eng'
-        ? (D.rows.length ? <Gantt D={D} picked={picked} setPicked={setPicked} /> : <div style={{ background: V.surface, border: `1px dashed ${V.line3}`, borderRadius: 10, padding: 48, textAlign: 'center', fontSize: 14, color: V.muted2 }}>工程清單中還沒有資料。</div>)
-        : <ComboPage S={S} D={D} mode={mode} />}
+        ? (D.rows.length ? <Gantt D={D} picked={picked} setPicked={setPicked} cust={cust} /> : <div style={{ background: V.surface, border: `1px dashed ${V.line3}`, borderRadius: 10, padding: 48, textAlign: 'center', fontSize: 14, color: V.muted2 }}>工程清單中還沒有資料。</div>)
+        : <ComboPage S={S} D={D} mode={mode} cust={cust} />}
     </div>
   );
 }
