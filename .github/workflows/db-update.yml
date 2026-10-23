@@ -6,6 +6,7 @@ name: 更新 Supabase 資料庫
 # - 跑完檢查 schema_version() 是否等於檔案最後寫的版本號
 # - 需要 GitHub Secret：SUPABASE_DB_URL（Supabase → Connect → Session pooler 的連線字串，含資料庫密碼）
 #   一定要放在 Secrets，不能放在 Variables（Variables 是公開的）
+# - 改了 Secret 後要重跑：Actions → 更新 Supabase 資料庫 → Run workflow
 on:
   push:
     branches: [main]
