@@ -132,4 +132,4 @@ jobs:
           if [ "$want" != "$got" ]; then echo "::error::版本號不一致（檔案 $want，資料庫 $got）"; exit 1; fi
           # 請 Supabase API（PostgREST）重新讀取資料表結構，新的檢視表／函式馬上可以用
           sql "notify pgrst, 'reload schema'" >/dev/null || true
-          echo "::notice::資料庫已更新到 v$got（連線方式：$MODE）"
+          echo "::notice::資料庫已更新到 v$got（連線方式：$MODE${PGHOST:+，$PGHOST:$PGPORT}）"
