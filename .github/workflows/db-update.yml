@@ -49,6 +49,11 @@ jobs:
             postgres://*|postgresql://*) ;;
             *) echo "::error::連線字串要以 postgresql:// 開頭（請複製 URI 格式，不是其他格式）。"; exit 1;;
           esac
+          rest="${PGURL#*://}"; creds="${rest%@*}"; pass="${creds#*:}"
+          case "$pass" in
+            '['*|*']') echo "::error::密碼外面還有方括號 [ ]，請連方括號一起刪掉：…:密碼@aws-…"; exit 1;;
+            *[/?#@\ ]*) echo "::error::密碼裡有 / ? # @ 或空白，會讓連線字串斷錯位置。請把這些符號改成網址編碼（/→%2F ?→%3F #→%23 @→%40），或重設成只有英文字母和數字的密碼。"; exit 1;;
+          esac
           # 連線失敗時把 psql 的錯誤顯示在摘要上（連線字串一律遮掉）
           if ! err=$(psql "$PGURL" -v ON_ERROR_STOP=1 -tAc "select 'ok'" 2>&1 >/dev/null); then
             msg=$(printf '%s' "$err" | sed -E 's#postgres(ql)?://[^ "]*#<連線字串>#g' | tr '\n' ' ' | cut -c1-400)
