@@ -1,0 +1,63 @@
+name: 更新 Supabase 資料庫
+
+# supabase/schema.sql 有改動並推到 main 時，自動在 Supabase 執行整份 schema.sql
+# （schema.sql 本來就可以重複執行、不刪資料）
+# - 整份在同一個交易裡跑：任何一行出錯就停下來、全部復原，不會留下改一半的資料庫
+# - 跑完檢查 schema_version() 是否等於檔案最後寫的版本號
+# - 需要 GitHub Secret：SUPABASE_DB_URL（Supabase → Connect → Session pooler 的連線字串，含資料庫密碼）
+#   一定要放在 Secrets，不能放在 Variables（Variables 是公開的）
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/schema.sql'
+      - '.github/workflows/db-update.yml'
+  workflow_dispatch:
+
+# 同一時間只跑一個，避免兩次更新互相干擾
+concurrency:
+  group: db-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      PGURL: ${{ secrets.SUPABASE_DB_URL }}
+      PGCONNECT_TIMEOUT: '20'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 檢查設定
+        run: |
+          if [ -z "$PGURL" ]; then
+            echo "::error::還沒設定 GitHub Secret「SUPABASE_DB_URL」。請到 repo → Settings → Secrets and variables → Actions → Secrets 新增（Supabase → Connect → Session pooler 的連線字串）。"
+            exit 1
+          fi
+          command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client; }
+          psql --version
+
+      - name: 連線測試
+        run: |
+          if ! psql "$PGURL" -v ON_ERROR_STOP=1 -tAc "select 'ok'" >/dev/null; then
+            echo "::error::連不上資料庫。請確認：1) 用的是 Session pooler 的連線字串（GitHub 只支援 IPv4）；2) [YOUR-PASSWORD] 已換成資料庫密碼；3) 密碼裡有 @ : / # ? 等符號時要改成網址編碼（例如 @ → %40）；4) Supabase 專案沒有被暫停。"
+            exit 1
+          fi
+          echo "目前資料庫版本：$(psql "$PGURL" -tAc 'select public.schema_version()' 2>/dev/null || echo '（舊版，沒有版本函式）')"
+
+      - name: 執行 schema.sql（單一交易，出錯全部復原）
+        run: |
+          psql "$PGURL" -v ON_ERROR_STOP=1 --single-transaction -q -f supabase/schema.sql \
+            || { echo "::error::schema.sql 執行失敗，資料庫已全部復原（沒有任何改動）。錯誤訊息在上面幾行。"; exit 1; }
+
+      - name: 確認版本號
+        run: |
+          want=$(grep -oE 'select [0-9]+ \$\$;' supabase/schema.sql | tail -1 | grep -oE '[0-9]+')
+          got=$(psql "$PGURL" -tAc 'select public.schema_version()')
+          echo "檔案版本：$want　資料庫版本：$got"
+          if [ "$want" != "$got" ]; then echo "::error::版本號不一致（檔案 $want，資料庫 $got）"; exit 1; fi
+          # 請 Supabase API（PostgREST）重新讀取資料表結構，新的檢視表／函式馬上可以用
+          psql "$PGURL" -q -c "notify pgrst, 'reload schema'"
+          echo "::notice::資料庫已更新到 v$got"

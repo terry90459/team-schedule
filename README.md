@@ -128,9 +128,12 @@ schema 更新後（例如這次新增工程師／Planner），請把 `supabase/s
 - 還原會**取代全部工作資料**，但不會新增、刪除或修改登入帳號；目前使用中的帳號會自動加回成員清單。
 
 ## 更新資料庫（schema）
-1. 修改 `supabase/schema.sql` 時，把檔案最後 `schema_version()` 的數字加 1，並同步修改 `src/main.jsx` 的 `SCHEMA_VERSION`。
-2. push 後網頁會先上線；到 Supabase **SQL Editor → New query**，貼上最新的 `schema.sql` 全文 → **Run**。
-3. 資料庫還沒更新前，管理員登入會在頁面上方看到「資料庫需要更新」，執行完按「已執行，重新檢查」即可。
+1. 修改 `supabase/schema.sql` 時，把檔案最後 `schema_version()` 的數字加 1，並同步修改 `src/data/backend.js` 的 `SCHEMA_VERSION`。
+2. push 到 main 後，GitHub Actions 的「**更新 Supabase 資料庫**」會自動執行整份 `schema.sql`（同一個交易，任何一行出錯就全部復原），並確認版本號。到 repo 的 **Actions** 分頁看結果；失敗時錯誤訊息就在那次執行的紀錄裡。
+   - 第一次要設定 Secret：Supabase → **Connect** → **Session pooler**，複製連線字串（把 `[YOUR-PASSWORD]` 換成資料庫密碼）→ GitHub repo → Settings → Secrets and variables → Actions → **Secrets** → 新增 `SUPABASE_DB_URL`。**一定要放 Secrets，不能放 Variables**。
+   - 也可以在 Actions 分頁選「更新 Supabase 資料庫」→ **Run workflow** 手動執行。
+   - 沒設定 Secret 時，照舊到 Supabase **SQL Editor → New query**，貼上最新的 `schema.sql` 全文 → **Run**。
+3. 資料庫還沒更新前，管理員登入會在頁面上方看到「資料庫需要更新」，更新完按「已執行，重新檢查」即可。
 
 ---
 

@@ -50,7 +50,7 @@ node dev-test/smoke.cjs                                 # 快速測試（要先�
 - 可以重複執行、不刪資料。**改了 schema 要做三件事**：
   1. 檔案最後 `schema_version()` 的數字加 1，並同步改 `src/data/backend.js` 的 `SCHEMA_VERSION`
   2. 同步更新 `src/demo/fakeSupabase.js`（預覽版的權限模擬）
-  3. 告訴 Hank 要把整份 `schema.sql` 貼到 Supabase → SQL Editor 執行（資料庫沒更新前，管理員頁面會出現提醒）
+  3. 推到 main 後，GitHub Actions「更新 Supabase 資料庫」（`.github/workflows/db-update.yml`）會自動在 Supabase 執行整份 schema.sql（單一交易，出錯全部復原）；到 Actions 確認成功。需要 Secret `SUPABASE_DB_URL`（Session pooler 連線字串）。失敗時才請 Hank 手動貼到 SQL Editor
 - 權限一律在資料庫（RLS／檢視表／觸發器）把關，畫面隱藏只是輔助。
 - 角色：`viewer`／`engineer`／`planner`／`admin`／`customer`；`profiles.tabs` 是可見分頁（內部帳號 null＝全部；客戶＝綁定的分頁）。客戶帳號只能讀 `cust_items`／`cust_plans` 檢視表。
 - 更新時間、更新者由資料庫填（伺服器台灣時間），前端送的值會被覆蓋。
@@ -59,7 +59,7 @@ node dev-test/smoke.cjs                                 # 快速測試（要先�
 1. `node dev-test/smoke.cjs` 全部 PASS；新功能要在 `smoke.cjs` 加對應檢查
 2. 有改 schema：在 Linux／WSL 跑 `dev-test/linux-db/` 的資料庫測試（見該資料夾 README）
 3. 建預覽版給 Hank 看（可以把 `dist-demo/` 用任何靜態伺服器開起來；預覽版的 `index.html` 只有內容片段，`smoke.cjs` 裡有補外框的寫法）
-4. Hank 確認後才 commit＋push，push 後到 GitHub → Actions 確認「部署到 GitHub Pages」成功
+4. Hank 確認後才 commit＋push，push 後到 GitHub → Actions 確認「部署到 GitHub Pages」成功（有改 schema 的話，「更新 Supabase 資料庫」也要成功）
 
 ## 每年要做
 - 人事行政總處約每年 6 月公布隔年「政府行政機關辦公日曆表」→ 把隔年的放假日加進 `src/lib/util.js` 的 `TW_OFF`（補班的週六放 `TW_WORK`）。目前有 2026、2027。
