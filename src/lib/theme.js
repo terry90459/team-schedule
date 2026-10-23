@@ -51,7 +51,7 @@ const PRBAR = {
 };
 const WD = ['日', '一', '二', '三', '四', '五', '六'];
 const UN = '未指派';
-const OVER = 'oklch(0.52 0.16 25)';
+const OVER = 'var(--over)';   // 逾期紅：淺色／深色主題各有一組（build.mjs）
 
 // 色票 → CSS 變數（淺色／深色主題由 CSS 切換）
 const V = {

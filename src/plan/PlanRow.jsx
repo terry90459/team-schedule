@@ -1,8 +1,8 @@
 import React from 'react';
 import { MONO, V } from '../lib/theme';
 import { byName, diff, s2d } from '../lib/util';
-import { CellText, RowDelete, gridOf, mvBtn } from '../ui/common';
-import { CUST_PLAN_COLS, TabMove, tabName, visCols } from '../ui/tabs';
+import { CellText, RowDelete, mvBtn } from '../ui/common';
+import { TabMove, tabName } from '../ui/tabs';
 
 /* ============================================================
    外框
@@ -10,9 +10,11 @@ import { CUST_PLAN_COLS, TabMove, tabName, visCols } from '../ui/tabs';
 /* ============================================================
    機台生產排程（Planner team）
    ============================================================ */
-const PGRID = [150, 150, 240, 100, 132, 132, 64, 300, 126, 64];
-const PGMIN = [100, 80, 120, 70, 110, 110, 56, 100, 100, 64];
-const PHEADS = [['Machine', '機台名稱'], ['Group', '測試產品 Group'], ['Product', '測試產品名稱'], ['HW', 'HW team'], ['Start', '開始日'], ['End', '結束日'], ['Days', '天數'], ['Remark', '備註'], ['Update', '更新時間'], ['', '']];
+// Remark 欄（客戶看不到備註時改 Product 欄）是「最小寬度＋撐滿剩餘空間」
+const PGRID = [140, 140, 200, 100, 132, 132, 64, 200, 126, 64];
+const PGMIN = [100, 80, 120, 70, 110, 110, 56, 120, 100, 64];
+const planTemplate = (idx, cols) => { const flex = idx.includes(7) ? 7 : 2; return idx.map((i) => (i === flex ? `minmax(${cols[i]}px,1fr)` : `${cols[i]}px`)).join(' '); };
+const PHEADS = [['Machine', '機台'], ['Group', 'Group'], ['Product', '產品'], ['HW', '需 HW 協助'], ['Start', '開始日'], ['End', '結束日'], ['Days', '天數'], ['Remark', '備註'], ['Update', '更新時間'], ['', '']];
 const pCell = { padding: '4px 4px', minWidth: 0, display: 'flex', alignItems: 'center' };
 const pin = (extra) => ({ height: 30, width: '100%', minWidth: 0, border: '1px solid transparent', borderRadius: 6, background: 'transparent', padding: '0 8px', fontSize: 13, ...extra });
 
@@ -25,7 +27,7 @@ function HwSwitch({ on, onChange, disabled }) {
   );
 }
 
-function PlanRow({ p, S, ro, clash, machineOpts, cols }) {
+function PlanRow({ p, S, ro, clash, machineOpts, cols, tpl }) {
   const set = (k) => (v) => S.patchPlan(p.id, { [k]: v });
   const days = p.start && p.end ? diff(s2d(p.end), s2d(p.start)) + 1 : '';
   const bad = p.start && p.end && days < 1;
@@ -33,7 +35,7 @@ function PlanRow({ p, S, ro, clash, machineOpts, cols }) {
   const cu = S.isCust;
   const dateStyle = (c) => pin({ fontFamily: MONO, fontSize: 12, padding: '0 4px', color: c || 'inherit' });
   return (
-    <div className="wcard" style={{ display: 'grid', gridTemplateColumns: gridOf(visCols(S, cols, CUST_PLAN_COLS)), alignItems: 'stretch', background: V.surface, border: `1px solid ${clash && !cu ? 'oklch(0.7 0.12 50)' : V.line2}`, borderRadius: 8, minHeight: 46, boxShadow: p.hw && !cu ? 'inset 4px 0 0 oklch(0.62 0.15 50)' : undefined }}>
+    <div className="wcard" style={{ display: 'grid', gridTemplateColumns: tpl, alignItems: 'stretch', background: V.surface, border: `1px solid ${clash && !cu ? 'oklch(0.7 0.12 50)' : V.line2}`, borderRadius: 8, minHeight: 46, boxShadow: p.hw && !cu ? 'inset 4px 0 0 oklch(0.62 0.15 50)' : undefined }}>
       <div style={pCell}>
         <select className="cin" value={p.machine || ''} disabled={ro} onChange={(e) => set('machine')(e.target.value)} style={pin({ cursor: ro ? 'default' : 'pointer', fontFamily: MONO, fontSize: 12, fontWeight: 600 })}>
           <option value="">—</option>
@@ -52,7 +54,7 @@ function PlanRow({ p, S, ro, clash, machineOpts, cols }) {
       {!cu && <>
       <div style={pCell}><CellText multiline grow className="cin" value={p.remark} onCommit={set('remark')} disabled={ro} placeholder="備註" style={pin({ height: 'auto', minHeight: 30, padding: '5px 8px', lineHeight: 1.45, resize: 'none', overflow: 'hidden', color: V.ink2 })} /></div>
       <div style={{ ...pCell, fontFamily: MONO, fontSize: 11, color: V.muted2, flexDirection: 'column', alignItems: 'flex-start', justifyContent: 'center', gap: 1 }}><span>{p.updated || '—'}</span>{p.updatedBy && <span style={{ fontSize: 10.5, color: V.faint }}>{p.updatedBy}</span>}</div>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
+      <div className="row-actions" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2 }}>
         <button className="mv" disabled={ro} onClick={() => S.addPlan('', p)} title="複製一筆（同樣內容，可再改機台或日期）" style={{ ...mvBtn, fontSize: 13, width: 24 }}>⧉</button>
         {!ro && <TabMove S={S} cur={p.customer} onMove={(t) => S.movePlanTab(p.id, t).then(() => S.say(`已移到「${tabName(S, t)}」`))} />}
         <RowDelete disabled={ro} onDelete={() => S.delPlan(p.id)} />
@@ -62,4 +64,4 @@ function PlanRow({ p, S, ro, clash, machineOpts, cols }) {
   );
 }
 
-export { PGRID, PGMIN, PHEADS, pCell, pin, HwSwitch, PlanRow };
+export { PGRID, PGMIN, PHEADS, planTemplate, pCell, pin, HwSwitch, PlanRow };

@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MONO, ST, V } from '../lib/theme';
 import { lsGet, lsSet, todayStr } from '../lib/util';
-import { Avatar, darkBtn, fld, lineBtn } from '../ui/common';
+import { Avatar, CellText, darkBtn, fld, lineBtn } from '../ui/common';
+import { FileList } from './files';
 
 /* ============================================================
-   C2：進度紀錄（右側抽屜）—— 資料在 logs 資源，rowId 指向工程項目
+   工作詳情（右側抽屜）：列上沒顯示的欄位（客戶窗口、天數、備註、附件）＋進度紀錄
+   C2：進度紀錄—— 資料在 logs 資源，rowId 指向工程項目
    ============================================================ */
 const sortLogs = (l) => [...l].sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.created || '').localeCompare(a.created || ''));
 
@@ -65,6 +67,30 @@ function LogEntry({ l, S, ro, authors }) {
   );
 }
 
+// 列上預設沒顯示的欄位，在這裡看與修改
+function DetailFields({ row, S, ro }) {
+  const set = (k) => (v) => S.patch(row.id, { [k]: v });
+  const lab = { fontSize: 11.5, color: V.muted2, paddingTop: 7 };
+  const box = { ...fld, width: '100%', height: 'auto', minHeight: 32, padding: '6px 8px', lineHeight: 1.5, resize: 'vertical' };
+  return (
+    <div style={{ padding: '14px 20px', borderBottom: `1px solid ${V.line}`, display: 'grid', gridTemplateColumns: '72px minmax(0,1fr)', gap: '8px 10px', alignItems: 'start' }}>
+      <span style={lab}>客戶窗口</span>
+      <CellText value={row.custOwner} onCommit={set('custOwner')} disabled={ro} placeholder="客戶窗口" style={{ ...fld, width: '100%' }} />
+      <span style={lab}>預計天數</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <CellText value={String(row.days ?? '')} onCommit={(v) => set('days')(v === '' ? '' : Number(v))} disabled={ro} style={{ ...fld, width: 80, fontFamily: MONO, textAlign: 'right' }} />
+        <span style={{ fontSize: 12, color: V.muted2 }}>{S.settings.workdays ? '工作天' : '天'}（從截止日往回推，畫在時程圖上）</span>
+      </span>
+      <span style={lab}>備註</span>
+      <CellText multiline rows={2} value={row.remark} onCommit={set('remark')} disabled={ro} placeholder="備註" style={box} />
+      <span style={lab}>附件</span>
+      <div style={{ paddingTop: 4 }}><FileList r={row} S={S} ro={ro} wide /></div>
+      <span style={{ ...lab, paddingTop: 0 }}>更新</span>
+      <span style={{ fontFamily: MONO, fontSize: 11.5, color: V.muted2 }}>{row.updated || '—'}{row.updatedBy ? '・' + row.updatedBy : ''}</span>
+    </div>
+  );
+}
+
 function LogDrawer({ row, S, ro, onClose }) {
   const logs = sortLogs(S.logs.filter((l) => l.rowId === row.id));
   const [date, setDate] = useState(todayStr);
@@ -84,12 +110,11 @@ function LogDrawer({ row, S, ro, onClose }) {
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(20,19,17,0.25)', zIndex: 40 }} />
-      <aside style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 460, maxWidth: '96vw', background: V.surface, borderLeft: `1px solid ${V.line2}`, boxShadow: '-16px 0 40px rgba(0,0,0,0.18)', zIndex: 41, display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '16px 20px 14px', borderBottom: `1px solid ${V.line}`, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <aside aria-label="工作詳情" style={{ position: 'fixed', top: 0, right: 0, bottom: 0, width: 480, maxWidth: '96vw', background: V.surface, borderLeft: `1px solid ${V.line2}`, boxShadow: '-16px 0 40px rgba(0,0,0,0.18)', zIndex: 41, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '16px 20px 14px', borderBottom: `1px solid ${V.line}`, display: 'flex', flexDirection: 'column', gap: 8, flex: 'none' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 12, color: V.muted2 }}>進度紀錄</span>
-            <span style={{ fontFamily: MONO, fontSize: 11, color: V.faint }}>{logs.length} 則</span>
-            <button onClick={onClose} title="關閉（Esc）" style={{ marginLeft: 'auto', border: 'none', background: 'transparent', fontSize: 18, cursor: 'pointer', color: V.muted, lineHeight: 1 }}>×</button>
+            <span style={{ fontSize: 12, color: V.muted2 }}>工作詳情</span>
+            <button onClick={onClose} title="關閉（Esc）" aria-label="關閉（Esc）" style={{ marginLeft: 'auto', border: 'none', background: 'transparent', fontSize: 18, cursor: 'pointer', color: V.muted, lineHeight: 1 }}>×</button>
           </div>
           <div style={{ fontSize: 15, fontWeight: 700, lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{row.item || '（未命名）'}</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, color: V.muted }}>
@@ -100,8 +125,14 @@ function LogDrawer({ row, S, ro, onClose }) {
             <span style={{ fontFamily: MONO }}>{row.due ? '截止 ' + row.due : '未設截止日'}</span>
           </div>
         </div>
+        <div style={{ flex: 1, overflow: 'auto' }}>
+        <DetailFields row={row} S={S} ro={ro} />
+        <div style={{ padding: '12px 20px 0', display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>進度紀錄</span>
+          <span style={{ fontFamily: MONO, fontSize: 11, color: V.faint }}>{logs.length} 則</span>
+        </div>
         {!ro && (
-          <div style={{ padding: '14px 20px', borderBottom: `1px solid ${V.line}`, display: 'flex', flexDirection: 'column', gap: 8, background: V.surface2 }}>
+          <div style={{ margin: '10px 20px 0', padding: 12, border: `1px solid ${V.line}`, borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 8, background: V.surface2 }}>
             <div style={{ display: 'flex', gap: 6 }}>
               <input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ ...fld, fontFamily: MONO, fontSize: 12, width: 140 }} />
               <select value={author} onChange={(e) => setAuthor(e.target.value)} title="紀錄人" style={{ ...fld, flex: 1 }}>
@@ -117,14 +148,15 @@ function LogDrawer({ row, S, ro, onClose }) {
             </div>
           </div>
         )}
-        <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px' }}>
+        <div style={{ padding: '16px 20px' }}>
           {logs.length === 0
             ? <div style={{ padding: '32px 0', textAlign: 'center', fontSize: 13, color: V.muted2 }}>還沒有進度紀錄{ro ? '' : '，在上方輸入第一則。'}</div>
             : logs.map((l) => <LogEntry key={l.id} l={l} S={S} ro={ro} authors={S.owners} />)}
+        </div>
         </div>
       </aside>
     </>
   );
 }
 
-export { sortLogs, LogEntry, LogDrawer };
+export { sortLogs, LogEntry, DetailFields, LogDrawer };

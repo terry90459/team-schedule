@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { MONO, OVER, SOON, V } from '../lib/theme';
 import { stamp } from '../lib/util';
 import { CellText, FSEL, card, cin, darkBtn, fld, lineBtn } from '../ui/common';
+import { InfoToggle } from '../ui/menu';
 import { TEAM_LABEL } from '../worklist/members';
 import { ROLE_HINT, ROLE_LABEL, STATUS_LABEL, STATUS_TONE, dbErr } from './auth';
 
@@ -376,24 +377,27 @@ function AccountsPage({ sb, S, profiles, reload, oldDb }) {
   const cnt = (s) => profiles.filter((p) => p.status === s).length;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div style={{ fontSize: 13, color: V.muted, lineHeight: 1.75 }}>
+      <div style={{ display: 'flex', gap: 14, fontSize: 12, color: V.muted2, alignItems: 'center', flexWrap: 'wrap' }}>
+        <span>待核准 <b style={{ color: cnt('pending') ? SOON.fg : 'inherit' }}>{cnt('pending')}</b></span><span>使用中 <b>{cnt('active')}</b></span><span>已停用 <b>{cnt('disabled')}</b></span>
+        <span style={{ marginLeft: 'auto' }} />
+      </div>
+      <InfoToggle id="accounts" label="帳號與權限怎麼運作">
         信箱在下方「允許註冊名單」內的人，可以在登入頁「註冊新帳號」，註冊後會出現在最上面（待核准），權限預設為<b>只能看</b>；需要的話先改權限，再按<b>核准</b>。要暫停某人使用請按<b>停用</b>，之後按<b>恢復</b>即可回到原本的權限。<br />
         {Object.entries(ROLE_LABEL).map(([k, l]) => <span key={k} style={{ marginRight: 14 }}><b>{l}</b>：{ROLE_HINT[k]}</span>)}<br />
         核准為工程師、Planner 或管理員後，會自動加入團隊成員（工程師／管理員 → 工程師組，Planner → Planner 組）；清單裡已有這個人時，請在「對應團隊成員」選他。在這裡改名稱，Owner、紀錄人、更新者都會一起改。<br />
         <b>停用</b>或<b>刪除</b>的帳號會從成員清單移除；他負責的工作會保留，並在工程清單顯示「⚠ 負責人已不在清單」提醒改派（恢復帳號後會自動回到清單）。<b>刪除帳號</b>只有 ★ 最高管理員能操作。
-      </div>
-      <div style={{ display: 'flex', gap: 14, fontSize: 12, color: V.muted2 }}>
-        <span>待核准 <b style={{ color: cnt('pending') ? SOON.fg : 'inherit' }}>{cnt('pending')}</b></span><span>使用中 <b>{cnt('active')}</b></span><span>已停用 <b>{cnt('disabled')}</b></span>
-      </div>
+      </InfoToggle>
       {err && <div style={{ fontSize: 13, color: OVER }}>{err}</div>}
-      <div style={{ ...card, overflow: 'hidden' }}>
+      <div style={{ ...card, overflow: 'auto' }}>
+        <div style={{ minWidth: 1000 }}>
         <div style={{ display: 'grid', gridTemplateColumns: G, gap: 10, padding: '8px 16px', fontSize: 11, color: V.muted2, background: V.tint, borderBottom: `1px solid ${V.line}` }}>
           <span>操作</span><span>顯示名稱</span><span>Email</span><span>狀態</span><span>權限</span><span>可見分頁</span><span>對應團隊成員</span><span style={{ textAlign: 'right' }}>註冊時間</span>
         </div>
         {sorted.map((p) => <AccountRow key={p.id} p={p} S={S} sb={sb} G={G} isMe={p.id === S.profile.id} canDelete={!!S.profile.is_owner} onErr={setErr} reload={reload} />)}
         {sorted.length === 0 && <div style={{ padding: 20, fontSize: 13, color: V.muted2 }}>讀取中…</div>}
+        </div>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(460px, 1fr))', gap: 12, marginTop: 4 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(460px, 100%), 1fr))', gap: 12, marginTop: 4 }}>
         <AllowListPanel sb={sb} S={S} oldDb={oldDb} />
         <BackupPanel sb={sb} S={S} oldDb={oldDb} />
       </div>

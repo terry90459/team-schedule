@@ -11,12 +11,13 @@ import { NO_TAB, TabBar, scopeStore } from '../ui/tabs';
 import { WorklistPage } from '../worklist/WorklistPage';
 import { Overview } from '../dashboard/Overview';
 import { Board } from '../dashboard/Board';
-import { ComboPage } from '../plan/timeline';
+import { TimelinePage } from '../plan/timeline';
+import { Gantt } from '../dashboard/Gantt';
 import { PlanPage } from '../plan/PlanPage';
 import { DailyPage } from '../daily/DailyPage';
 import { SettingsMenu } from './SettingsMenu';
 import { AuthPage, AuthShell, PendingPage, ROLE_LABEL, useProfiles } from '../account/auth';
-import { AccountsPage } from '../account/AccountsPage';
+import { ManagePage } from '../account/ManagePage';
 
 /* ---------- A4：資料庫版本檢查 ---------- */
 function useDbVersion(sb) {
@@ -54,17 +55,19 @@ function SchemaBanner({ ver, isAdmin, recheck }) {
 }
 function UserMenu({ sb, S }) {
   const [open, setOpen] = useState(false);
+  const role = S.profile.is_owner ? '★ 最高管理員' : ROLE_LABEL[S.role] || S.profile.role;
   return (
     <div style={{ position: 'relative' }}>
-      <button onClick={() => setOpen((o) => !o)} style={{ ...FSEL, height: 30, display: 'flex', alignItems: 'center', gap: 6 }}>
-        <Avatar name={S.me || '?'} size={20} />{S.me}<span style={{ fontSize: 10.5, color: V.muted2 }}>{S.profile.is_owner ? '★ 最高管理員' : ROLE_LABEL[S.role] || S.profile.role}</span>▾
+      <button onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} title={`${S.me}（${role}）`} style={{ ...FSEL, height: 30, display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+        <Avatar name={S.me || '?'} size={20} /><span className="hide-sm">{S.me}</span>{S.profile.is_owner && <span style={{ fontSize: 11, color: 'oklch(0.55 0.1 70)' }}>★</span>}▾
       </button>
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 29 }} />
-          <div style={{ position: 'absolute', top: 36, right: 0, width: 220, zIndex: 30, background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.15)', padding: 6, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ padding: '6px 10px', fontSize: 11.5, color: V.muted2 }}>{S.profile.email}</div>
-            <div style={{ padding: '2px 10px 6px', fontSize: 11, color: V.faint }}>顯示名稱由管理員在「帳號管理」修改</div>
+          <div role="menu" style={{ position: 'absolute', top: 36, right: 0, width: 220, zIndex: 30, background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.15)', padding: 6, display: 'flex', flexDirection: 'column' }}>
+            <div style={{ padding: '6px 10px 0', fontSize: 13, fontWeight: 500 }}>{S.me}<span style={{ marginLeft: 6, fontSize: 11, fontWeight: 400, color: V.muted2 }}>{role}</span></div>
+            <div style={{ padding: '2px 10px 6px', fontSize: 11.5, color: V.muted2 }}>{S.profile.email}</div>
+            <div style={{ padding: '2px 10px 6px', fontSize: 11, color: V.faint }}>顯示名稱由管理員在「⚙ 管理 → 帳號」修改</div>
             <button className="member-item" onClick={() => sb.auth.signOut()} style={menuItem}>登出</button>
           </div>
         </>
@@ -135,35 +138,42 @@ function usePresence(sb, profile, page) {
   useEffect(() => { const c = ch.current; if (c && ok) c.track({ ...cur.current, at: new Date().toISOString() }).catch(() => {}); }, [page, ok, profile && profile.name, profile && profile.role]);
   return { list, ok };
 }
-const PAGE_LABEL = { overview: '總覽', daily: '每日', combo: '複合排程', list: '工程清單', plan: '生產排程', board: '卡片看板', accounts: '帳號管理' };
-function OnlineBadge({ P, meId }) {
+const PAGE_LABEL = { overview: '總覽', daily: '每日', timeline: '時程圖', combo: '時程圖', list: '工程清單', plan: '生產排程', board: '卡片看板', accounts: '管理' };
+// 右上角狀態：同步方式・線上人數；點開看最後更新、誰在線上
+function StatusMenu({ badge, P, meId, last, showOnline }) {
   const [open, setOpen] = useState(false);
   const n = P.list.length;
   const since = (t) => { if (!t) return ''; const m = Math.max(0, Math.round((Date.now() - new Date(t).getTime()) / 60000)); return m < 1 ? '剛剛' : m < 60 ? `${m} 分鐘前` : `${Math.floor(m / 60)} 小時前`; };
   return (
     <div style={{ position: 'relative' }}>
-      <button onClick={() => setOpen((o) => !o)} title="點開看誰在線上、目前在哪一頁" style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 0, fontSize: 11.5, color: P.ok ? 'oklch(0.45 0.1 155)' : V.faint, display: 'flex', alignItems: 'center', gap: 4 }}>
-        👥 {P.ok ? <>線上 <b>{n}</b> 人</> : '線上人數讀取中…'} <span style={{ fontSize: 9 }}>▾</span>
+      <button className="status-dot" onClick={() => setOpen((o) => !o)} aria-expanded={open} title={badge[0]} style={{ color: badge[1] }}>
+        <i aria-hidden="true" /><span className="hide-sm">{badge[2]}</span>
+        {showOnline && P.ok && <span style={{ color: V.muted }}>・{n} 人在線</span>}
       </button>
       {open && (
         <>
-          <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 29 }} />
-          <div style={{ position: 'absolute', top: 22, right: 0, width: 300, zIndex: 30, background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.15)', padding: 10, display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <div style={{ fontSize: 13, fontWeight: 500, padding: '2px 4px 6px', display: 'flex', alignItems: 'baseline', gap: 6 }}>目前在線<span style={{ fontFamily: MONO, fontSize: 11, color: V.muted2 }}>{n} 人</span></div>
-            {!P.ok && <div style={{ fontSize: 12, color: V.muted2, padding: '4px' }}>即時連線還沒建立（公司網路可能擋住），暫時看不到線上人數。</div>}
-            {P.ok && P.list.map((u) => (
-              <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 6px', borderRadius: 6, background: u.id === meId ? V.tint : undefined }}>
-                <span style={{ position: 'relative', flex: 'none' }}><Avatar name={u.name || '?'} size={24} /><span style={{ position: 'absolute', right: -1, bottom: -1, width: 8, height: 8, borderRadius: 4, background: 'oklch(0.62 0.15 150)', border: `2px solid ${V.surface}` }} /></span>
-                <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', lineHeight: 1.35 }}>
-                  <span style={{ fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name || '（未命名）'}{u.id === meId && <span style={{ fontSize: 10.5, color: V.muted2, marginLeft: 4 }}>（你）</span>}{u.owner ? <span style={{ fontSize: 10.5, color: 'oklch(0.45 0.1 70)', marginLeft: 4 }}>★</span> : null}</span>
-                  <span style={{ fontSize: 11, color: V.muted2 }}>{ROLE_LABEL[u.role] || ''}{u.tabs > 1 ? `・開了 ${u.tabs} 個分頁` : ''}</span>
-                </span>
-                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.35, flex: 'none' }}>
-                  <span style={{ fontSize: 12, color: V.ink2 }}>{(u.pages || [u.page]).map((pg) => PAGE_LABEL[pg] || pg).join('、')}</span>
-                  <span style={{ fontSize: 10.5, color: V.faint }}>{since(u.at)}</span>
-                </span>
-              </div>
-            ))}
+          <div className="pop-veil" onClick={() => setOpen(false)} />
+          <div className="pop" style={{ top: 36, right: 0, width: 300, padding: 10, gap: 4 }}>
+            <div style={{ fontSize: 12.5, padding: '2px 4px', color: badge[1] }}>● {badge[0]}</div>
+            <div style={{ fontSize: 12, padding: '2px 4px 6px', color: V.muted2 }}>最後更新 <span className="mono">{last.t || '—'}</span>{last.t ? `　${last.what}${last.who ? '・' + last.who : ''}` : ''}</div>
+            {showOnline && <>
+              <div className="pop-sep" />
+              <div style={{ fontSize: 13, fontWeight: 500, padding: '4px 4px 6px', display: 'flex', alignItems: 'baseline', gap: 6 }}>目前在線<span className="mono muted" style={{ fontSize: 11 }}>{n} 人</span></div>
+              {!P.ok && <div style={{ fontSize: 12, color: V.muted2, padding: '4px' }}>即時連線還沒建立（公司網路可能擋住），暫時看不到線上人數。</div>}
+              {P.ok && P.list.map((u) => (
+                <div key={u.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 6px', borderRadius: 6, background: u.id === meId ? V.tint : undefined }}>
+                  <span style={{ position: 'relative', flex: 'none' }}><Avatar name={u.name || '?'} size={24} /><span style={{ position: 'absolute', right: -1, bottom: -1, width: 8, height: 8, borderRadius: 4, background: 'oklch(0.62 0.15 150)', border: `2px solid ${V.surface}` }} /></span>
+                  <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', lineHeight: 1.35 }}>
+                    <span style={{ fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{u.name || '（未命名）'}{u.id === meId && <span style={{ fontSize: 10.5, color: V.muted2, marginLeft: 4 }}>（你）</span>}{u.owner ? <span style={{ fontSize: 10.5, color: 'oklch(0.45 0.1 70)', marginLeft: 4 }}>★</span> : null}</span>
+                    <span style={{ fontSize: 11, color: V.muted2 }}>{ROLE_LABEL[u.role] || ''}{u.tabs > 1 ? `・開了 ${u.tabs} 個分頁` : ''}</span>
+                  </span>
+                  <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', lineHeight: 1.35, flex: 'none' }}>
+                    <span style={{ fontSize: 12, color: V.ink2 }}>{(u.pages || [u.page]).map((pg) => PAGE_LABEL[pg] || pg).join('、')}</span>
+                    <span style={{ fontSize: 10.5, color: V.faint }}>{since(u.at)}</span>
+                  </span>
+                </div>
+              ))}
+            </>}
           </div>
         </>
       )}
@@ -196,7 +206,10 @@ function App({ sb = null, profile = null }) {
   const tabCount = (k) => { const z = scopeStore(S, k, view === 'plan' ? 'plans' : 'rows'); return view === 'plan' ? z.plans.length : z.rows.length; };
   useEffect(() => { if (view === 'accounts' && isAdmin) reloadProfiles(); }, [view]);
   const [picked, setPicked] = useState({});
-  const [eview, setEview] = useState('list');
+  // P7：時程圖頁顯示哪一種（記住上次選的）
+  const [tlMode, setTlModeState] = useState(() => (['eng', 'plan', 'both'].includes(lsGet('tl.mode')) ? lsGet('tl.mode') : 'both'));
+  const setTlMode = (m) => { setTlModeState(m); lsSet('tl.mode', m); };
+  const goTimeline = (m) => { setTlMode(m); setView('timeline'); };
   const [logRowId, setLogRowId] = useState(null);
   const closeLogs = useCallback(() => setLogRowId(null), []);
   const logRow = logRowId && S.rows.find((r) => r.id === logRowId);
@@ -213,56 +226,51 @@ function App({ sb = null, profile = null }) {
   }, [S.rows, S.plans, S.logs, S.filesByRow]);
   const P = usePresence(cu ? null : sb, profile, view);   // 客戶帳號不加入線上名單，也看不到誰在線
   const tabs = cu ? [['list', '工程清單'], ['plan', '生產排程']]
-    : [['overview', '總覽'], ['daily', '每日'], ['combo', '複合排程'], ['list', '工程清單'], ['plan', '生產排程'], ['board', '卡片看板'], ...(isAdmin ? [['accounts', '帳號管理']] : [])];
+    : [['overview', '總覽'], ['daily', '每日'], ['list', '工程清單'], ['plan', '生產排程'], ['timeline', '時程圖'], ['board', '卡片看板'], ...(isAdmin ? [['accounts', '⚙ 管理']] : [])];
+  // [完整說明（滑鼠移上去看）, 顏色, 標題列上的短字]
   const badge =
-    S.mode === 'connecting' ? ['連線中…', V.muted2] :
-    cu ? ['僅供瀏覽', V.muted2] :
-    S.readOnly ? ['唯讀（可瀏覽，無法修改）', 'oklch(0.55 0.12 70)'] :
-    S.mode === 'sb' ? (S.live ? ['● 線上共用・即時同步', 'oklch(0.55 0.11 155)'] : ['● 線上共用・每 20 秒更新', 'oklch(0.55 0.1 120)']) :
-    ['僅存在這台裝置（未連線）', 'oklch(0.55 0.12 70)'];
+    S.mode === 'connecting' ? ['連線中…', V.muted2, '連線中…'] :
+    cu ? ['僅供瀏覽', V.muted2, '僅供瀏覽'] :
+    S.readOnly ? ['唯讀（可瀏覽，無法修改）', 'oklch(0.55 0.12 70)', '唯讀'] :
+    S.mode === 'sb' ? (S.live ? ['線上共用・即時同步', 'oklch(0.55 0.11 155)', '即時同步'] : ['線上共用・即時連線被擋，每 20 秒更新', 'oklch(0.55 0.1 120)', '每 20 秒更新']) :
+    ['僅存在這台裝置（未連線）', 'oklch(0.55 0.12 70)', '未連線'];
   const noData = S.rows.length === 0;
   const meOpts = S.me && !S.owners.includes(S.me) ? [...S.owners, S.me] : S.owners;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 1100 }}>
-      <header style={{ display: 'flex', alignItems: 'center', gap: 18, padding: '0 24px', height: 60, background: V.surface2, borderBottom: `1px solid ${V.line}`, flex: 'none' }}>
-        <h1 style={{ margin: 0, fontSize: 17, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap' }}>團隊工程清單與排程{!sb && <span style={{ fontSize: 11, fontWeight: 500, padding: '2px 7px', borderRadius: 5, background: V.todayBg, color: 'var(--accent)' }}>本機試用</span>}</h1>
-        <nav style={{ display: 'flex', gap: 2, height: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minWidth: 0 }}>
+      <header className="app-head" style={{ display: 'flex', alignItems: 'center', gap: 18, padding: '0 24px', height: 56, background: V.surface2, borderBottom: `1px solid ${V.line}`, flex: 'none', minWidth: 0 }}>
+        <h1 className="app-title" style={{ margin: 0, fontSize: 17, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8, whiteSpace: 'nowrap', flex: 'none' }}><span className="hide-md">團隊工程清單與排程</span><span className="show-md">工程排程</span>{!sb && <span style={{ fontSize: 11, fontWeight: 500, padding: '2px 7px', borderRadius: 5, background: V.todayBg, color: 'var(--accent)' }}>本機試用</span>}</h1>
+        <nav className="app-nav" aria-label="主要頁面" style={{ display: 'flex', gap: 2, height: '100%', flex: '1 1 auto', minWidth: 0, overflowX: 'auto', overflowY: 'hidden' }}>
           {tabs.map(([k, label]) => (
-            <button key={k} onClick={() => setView(k)}
+            <button key={k} onClick={() => setView(k)} aria-current={view === k ? 'page' : undefined}
               style={{ height: '100%', padding: '0 12px', border: 'none', background: 'transparent', cursor: 'pointer', fontSize: 14, whiteSpace: 'nowrap', borderBottom: `2px solid ${view === k ? V.ink : 'transparent'}`, color: view === k ? V.ink : V.muted, fontWeight: view === k ? 500 : 400 }}>{label}{k === 'accounts' && pendingN > 0 && <span style={{ marginLeft: 6, fontSize: 11, padding: '1px 6px', borderRadius: 9, background: SOON.bd, color: '#fff' }}>{pendingN}</span>}</button>
           ))}
         </nav>
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
-          {sb ? <UserMenu sb={sb} S={S} /> : <label title="選你自己，修改紀錄與「只看我的」會用這個名字（記在這台瀏覽器）" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: V.muted }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8, flex: 'none' }}>
+          {!sb && <label title="選你自己，修改紀錄與「只看我的」會用這個名字（記在這台瀏覽器）" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: V.muted }}>
             我是
             <select value={S.me} onChange={(e) => S.setMe(e.target.value)} style={{ ...FSEL, height: 28, ...(S.me ? null : { borderColor: 'oklch(0.66 0.15 60)', color: 'oklch(0.5 0.13 55)' }) }}>
               <option value="">（請選擇）</option>
               {meOpts.map((o) => <option key={o} value={o}>{o}</option>)}
             </select>
           </label>}
+          <StatusMenu badge={badge} P={P} meId={profile && profile.id} last={last} showOnline={!!sb && !cu} />
           <SettingsMenu S={S} />
-          <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1, lineHeight: 1.3 }}>
-            <span style={{ fontSize: 12, color: badge[1], whiteSpace: 'nowrap' }}>{badge[0]}</span>
-            {sb && !cu && <OnlineBadge P={P} meId={profile && profile.id} />}
-          </span>
-          {!cu && <span title={last.t ? `最後一筆修改：${last.what}${last.who ? '・' + last.who : ''}（${last.t}）` : '還沒有任何修改'} style={{ fontSize: 11, color: V.muted2, whiteSpace: 'nowrap', display: 'flex', flexDirection: 'column', lineHeight: 1.25, alignItems: 'flex-end' }}>
-            <span>最後更新 <span style={{ fontFamily: MONO }}>{last.t ? last.t.slice(5) : '—'}</span></span>
-            {last.t && <span style={{ fontSize: 10.5, color: V.faint }}>{last.what}{last.who ? '・' + last.who : ''}</span>}
-          </span>}
+          {sb && <UserMenu sb={sb} S={S} />}
         </div>
       </header>
       {sb && <SchemaBanner ver={dbVer} isAdmin={isAdmin} recheck={recheckDb} />}
       {(view === 'list' || view === 'plan') && tab && <TabBar S={S} tab={tab} setTab={setTab} keys={tabKeys} count={tabCount} />}
 
       {view === 'list' ? (
-        <WorklistPage S={Sr} D={Dr} picked={picked} setPicked={setPicked} eview={eview} setEview={setEview} openLogs={setLogRowId} />
+        <WorklistPage S={Sr} D={Dr} openLogs={setLogRowId} goTimeline={goTimeline} />
       ) : view === 'plan' ? (
-        <PlanPage S={Sp} />
-      ) : view === 'combo' ? (
-        <div style={{ flex: 1, overflow: 'auto', padding: 24 }}><ComboPage S={S} D={D} /></div>
+        <PlanPage S={Sp} goTimeline={goTimeline} />
+      ) : view === 'timeline' ? (
+        <div style={{ flex: 1, overflow: 'auto', padding: 24 }}><TimelinePage S={S} D={D} mode={tlMode} setMode={setTlMode} picked={picked} setPicked={setPicked} Gantt={Gantt} /></div>
       ) : view === 'accounts' && isAdmin ? (
-        <div style={{ flex: 1, overflow: 'auto', padding: 24 }}><AccountsPage sb={sb} S={S} profiles={profiles} reload={reloadProfiles} oldDb={oldDb} /></div>
+        <div style={{ flex: 1, overflow: 'auto', padding: 24 }}><ManagePage sb={sb} S={S} profiles={profiles} reload={reloadProfiles} oldDb={oldDb} pendingN={pendingN} /></div>
       ) : view === 'daily' ? (
         <div style={{ flex: 1, overflow: 'auto', padding: 24 }}><DailyPage S={S} D={D} openLogs={setLogRowId} /></div>
       ) : (
@@ -272,7 +280,7 @@ function App({ sb = null, profile = null }) {
               工程清單中還沒有資料。<a href="#" onClick={(e) => { e.preventDefault(); setView('list'); }}>前往新增</a>
             </div>
           ) : view === 'overview' ? (
-            <Overview D={D} S={S} goGantt={(n) => { setPicked({ [n]: true }); setEview('gantt'); setView('list'); }} />
+            <Overview D={D} S={S} goGantt={(n) => { setPicked({ [n]: true }); goTimeline('eng'); }} />
           ) : (
             <Board D={D} S={S} openLogs={setLogRowId} />
           )}
@@ -284,11 +292,11 @@ function App({ sb = null, profile = null }) {
         <div style={{ position: 'fixed', left: '50%', bottom: 20, transform: 'translateX(-50%)', background: V.btnBg, color: V.btnFg, padding: '8px 10px 8px 16px', borderRadius: 8, fontSize: 13, boxShadow: '0 8px 24px rgba(0,0,0,0.25)', zIndex: 60, display: 'flex', alignItems: 'center', gap: 12, maxWidth: '80vw' }}>
           <span>{S.notice.text}</span>
           {S.notice.action && <button onClick={S.notice.action.run} style={{ border: `1px solid ${V.btnFg}`, background: 'transparent', color: V.btnFg, borderRadius: 6, padding: '3px 10px', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>{S.notice.action.label}</button>}
-          <button onClick={S.clearNotice} title="關閉" style={{ border: 'none', background: 'transparent', color: V.btnFg, cursor: 'pointer', fontSize: 15, opacity: 0.7 }}>×</button>
+          <button onClick={S.clearNotice} title="關閉" aria-label="關閉" style={{ border: 'none', background: 'transparent', color: V.btnFg, cursor: 'pointer', fontSize: 15, opacity: 0.7 }}>×</button>
         </div>
       )}
     </div>
   );
 }
 
-export { useDbVersion, SchemaBanner, UserMenu, menuItem, RootSB, usePresence, PAGE_LABEL, OnlineBadge, App };
+export { useDbVersion, SchemaBanner, UserMenu, menuItem, RootSB, usePresence, PAGE_LABEL, StatusMenu, App };

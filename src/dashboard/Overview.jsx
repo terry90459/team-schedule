@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MONO, OVER, PRBAR, PRIO, SOON, STATUS, STC, STTX, UN, V } from '../lib/theme';
+import { MONO, OVER, PRBAR, PRIO, SOON, STATUS, STC, UN, V } from '../lib/theme';
 import { addD, byName, dstr, s2d, validPlan } from '../lib/util';
 import { Avatar, card } from '../ui/common';
 
@@ -82,7 +82,7 @@ function useWinW() {
 function Overview({ D, S, goGantt }) {
   const w = useWinW();
   const e = engParts(D, goGantt), pl = planParts(S, D.today);
-  const cols = w >= 1500 ? 3 : 2;
+  const cols = w >= 1500 ? 3 : w >= 900 ? 2 : 1;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {e.kpis}
@@ -101,7 +101,7 @@ function engParts(D, goGantt) {
   const machines = Object.keys(mm).sort().map((k) => { const l = mm[k]; return { name: k, count: l.length, open: l.filter((r) => r.status !== '已完成').length, owners: [...new Set(l.map((r) => r.owner))].join('、') }; });
   const kpis = [
     { label: '工作總數', value: total, sub: `${rows.filter((r) => r.status === '進行中').length} 件進行中・${rows.filter((r) => r.status === '等客戶回覆').length} 件等客戶・${rows.filter((r) => r.status === '暫停').length} 件暫停`, fg: V.ink },
-    { label: '已完成', value: done, sub: total ? `完成率 ${Math.round((done / total) * 100)}%` : '—', fg: STTX['已完成'] },
+    { label: '已完成', value: done, sub: total ? `完成率 ${Math.round((done / total) * 100)}%` : '—', fg: 'var(--ok)' },
     { label: '未完成', value: total - done, sub: <>逾期 <b style={{ color: overdue ? OVER : 'inherit' }}>{overdue}</b> 件・3 天內到期 <b style={{ color: soonN ? SOON.fg : 'inherit' }}>{soonN}</b> 件</>, fg: overdue ? OVER : V.ink },
     { label: '參與人員', value: names.filter((n) => n !== UN).length, sub: names.includes(UN) ? `另有 ${rows.filter((r) => r.owner === UN).length} 件未指派` : '全部已指派', fg: V.ink },
     { label: '已安排機台', value: machines.length, sub: `${rows.filter((r) => (r.machine || '').trim()).length} 件工作使用機台`, fg: V.ink },
@@ -113,7 +113,7 @@ function engParts(D, goGantt) {
   const th = { fontSize: 11, color: V.muted2, background: V.tint, borderTop: `1px solid ${V.line}`, borderBottom: `1px solid ${V.line}` };
   return {
     kpis: (
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,minmax(0,1fr))', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 14 }}>
         {kpis.map((k) => (
           <div key={k.label} style={{ ...card, padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 6 }}>
             <span style={{ fontSize: 13, color: V.muted }}>{k.label}</span>
@@ -129,10 +129,10 @@ function engParts(D, goGantt) {
           <div style={{ display: 'flex', height: 14, borderRadius: 7, overflow: 'hidden', background: V.head }}>
             {statusBars.map((s) => <div key={s.label} title={s.label} style={{ height: '100%', width: s.pct, background: s.fg }} />)}
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: `repeat(${STATUS.length},minmax(0,1fr))`, gap: 10 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(84px,1fr))', gap: 10 }}>
             {statusBars.map((s) => (
               <div key={s.label} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: V.muted }}><span style={{ width: 8, height: 8, borderRadius: 2, background: s.fg }} />{s.label}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: V.muted, whiteSpace: 'nowrap' }}><span style={{ width: 8, height: 8, borderRadius: 2, background: s.fg, flex: 'none' }} />{s.label}</div>
                 <span style={{ fontFamily: MONO, fontSize: 20 }}>{s.count}</span>
               </div>
             ))}

@@ -5,7 +5,7 @@ import { RangeBar, barTone, clip, useRange } from '../data/derive';
 import { Avatar, lineBtn } from '../ui/common';
 import { DIM, FOCUS_BAR, GANTT_LW, fitDW, focusHint, useBoxW, useFocus } from '../plan/timeline';
 
-/* 工程排程甘特圖（工程清單 → 工程排程） */
+/* 工程排程甘特圖（時程圖 → 工程排程） */
 function Gantt({ D, picked, setPicked }) {
   const { rows, names, today } = D;
   const anyPicked = Object.values(picked).some(Boolean);

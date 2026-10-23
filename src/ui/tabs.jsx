@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { MONO, OVER, V } from '../lib/theme';
-import { FSEL, darkBtn, fld, lineBtn } from './common';
+
 
 /* ============================================================
    A6：客戶分頁（工程清單、生產排程共用）
@@ -32,48 +32,55 @@ function TabMove({ S, cur, onMove, disabled }) {
   );
 }
 const tabBtn = (on) => ({ height: 30, padding: '0 12px', borderRadius: 7, cursor: 'pointer', fontSize: 13, display: 'flex', alignItems: 'center', gap: 6, border: `1px solid ${on ? V.btnBg : V.line2}`, background: on ? V.btnBg : V.surface, color: on ? V.btnFg : V.ink2, fontWeight: on ? 600 : 400 });
+// 工程清單、生產排程上方的分頁列（只負責切換；新增／改名／排序／刪除在「⚙ 管理 → 客戶分頁」）
 function TabBar({ S, tab, setTab, keys, count }) {
-  const [adding, setAdding] = useState(false), [nv, setNv] = useState(''), [renaming, setRenaming] = useState(false);
-  const admin = S.canAdmin;
-  const cur = S.customers.find((c) => c.id === tab);
-  const add = async () => { const id = await S.addTab(nv); setNv(''); setAdding(false); if (id) setTab(id); };
-  const mini = { ...FSEL, height: 26, padding: '0 7px', fontSize: 12 };
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', padding: '8px 24px', background: V.surface, borderBottom: `1px solid ${V.line}`, flex: 'none' }}>
-      <span style={{ fontSize: 12, color: V.muted2, marginRight: 4 }}>{S.isCust ? '客戶' : '分頁'}</span>
+    <div className="scope" role="tablist" aria-label={S.isCust ? '客戶' : '客戶分頁'}>
+      <span className="lab">{S.isCust ? '客戶' : '客戶'}</span>
       {keys.map((k) => {
         const c = S.customers.find((x) => x.id === k);
-        const n = count(k);
         return (
-          <button key={k} onClick={() => setTab(k)} style={{ ...tabBtn(tab === k), ...(k === NO_TAB ? { borderStyle: 'dashed', color: tab === k ? V.btnFg : OVER } : null) }}>
+          <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)} style={k === NO_TAB ? { color: OVER } : null}>
             {c ? c.name : '⚠ 未分類'}
-            {c && c.internal && <span style={{ fontSize: 10, padding: '0 5px', borderRadius: 4, background: tab === k ? 'rgba(255,255,255,0.2)' : V.tint, color: tab === k ? V.btnFg : V.muted2 }} title="內部分頁：客戶帳號看不到">內部</span>}
-            {!S.isCust && <span style={{ fontFamily: MONO, fontSize: 11, opacity: 0.7 }}>{n}</span>}
+            {c && c.internal && <span title="內部分頁：客戶帳號看不到" style={{ fontSize: 10, padding: '0 5px', borderRadius: 4, background: V.tint, color: V.muted2, fontWeight: 400 }}>內部</span>}
+            {!S.isCust && <span className="n">{count(k)}</span>}
           </button>
         );
       })}
-      {admin && cur && !renaming && (
-        <span style={{ display: 'flex', gap: 4, marginLeft: 6 }}>
-          <button onClick={() => setRenaming(true)} title="改名" style={mini}>✎</button>
-          <button onClick={() => S.shiftTab(cur.id, -1)} title="往左移" style={mini}>◀</button>
-          <button onClick={() => S.shiftTab(cur.id, 1)} title="往右移" style={mini}>▶</button>
-          <button onClick={() => S.delTab(cur.id)} title="刪除這個分頁（裡面要沒有資料）" style={{ ...mini, color: V.muted2 }}>刪除</button>
-        </span>
-      )}
-      {admin && cur && renaming && (
-        <form onSubmit={(e) => { e.preventDefault(); S.renameTab(cur.id, e.target.elements.n.value); setRenaming(false); }} style={{ display: 'flex', gap: 4, marginLeft: 6 }}>
-          <input name="n" defaultValue={cur.name} autoFocus maxLength={40} style={{ ...fld, height: 28, width: 140 }} />
-          <button type="submit" style={{ ...darkBtn, height: 28, fontSize: 12 }}>儲存</button>
-          <button type="button" onClick={() => setRenaming(false)} style={{ ...lineBtn, height: 28, fontSize: 12 }}>取消</button>
-        </form>
-      )}
-      {admin && (adding ? (
-        <form onSubmit={(e) => { e.preventDefault(); add(); }} style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
-          <input value={nv} onChange={(e) => setNv(e.target.value)} autoFocus maxLength={40} placeholder="客戶名稱" style={{ ...fld, height: 28, width: 140 }} />
-          <button type="submit" disabled={!nv.trim()} style={{ ...darkBtn, height: 28, fontSize: 12, opacity: nv.trim() ? 1 : 0.5 }}>新增</button>
-          <button type="button" onClick={() => setAdding(false)} style={{ ...lineBtn, height: 28, fontSize: 12 }}>取消</button>
-        </form>
-      ) : <button onClick={() => setAdding(true)} style={{ ...mini, marginLeft: 'auto' }}>＋ 新增分頁</button>)}
+    </div>
+  );
+}
+// ⚙ 管理 → 客戶分頁：新增、改名、排序、刪除（空的才能刪）
+function TabAdmin({ S }) {
+  const [nv, setNv] = useState(''), [edit, setEdit] = useState(null);
+  const add = async () => { if (!nv.trim()) return; await S.addTab(nv); setNv(''); };
+  const cnt = (id) => S.rows.filter((r) => r.customer === id).length + S.plans.filter((p) => p.customer === id).length;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 560 }}>
+      {S.customers.map((c, i) => (
+        <div key={c.id} className="member-item" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 6, fontSize: 13 }}>
+          {edit === c.id ? (
+            <form onSubmit={(e) => { e.preventDefault(); S.renameTab(c.id, e.target.elements.n.value); setEdit(null); }} style={{ display: 'flex', gap: 6, flex: 1 }}>
+              <input name="n" className="field" defaultValue={c.name} autoFocus maxLength={40} style={{ flex: 1, height: 28 }} onKeyDown={(e) => { if (e.key === 'Escape') setEdit(null); }} />
+              <button type="submit" className="btn btn-sm btn-primary">儲存</button>
+              <button type="button" className="btn btn-sm" onClick={() => setEdit(null)}>取消</button>
+            </form>
+          ) : (
+            <>
+              <span style={{ flex: 1, minWidth: 0 }}>{c.name}{c.internal && <span style={{ marginLeft: 6, fontSize: 10.5, padding: '0 5px', borderRadius: 4, background: V.tint, color: V.muted2 }}>內部</span>}</span>
+              <span className="mono muted" style={{ fontSize: 11 }}>{cnt(c.id)} 筆</span>
+              <button className="btn btn-sm btn-ghost" onClick={() => setEdit(c.id)} title="改名" aria-label={`把「${c.name}」改名`}>✎</button>
+              <button className="btn btn-sm btn-ghost" disabled={i === 0} onClick={() => S.shiftTab(c.id, -1)} title="往前移" aria-label={`把「${c.name}」往前移`}>▲</button>
+              <button className="btn btn-sm btn-ghost" disabled={i === S.customers.length - 1} onClick={() => S.shiftTab(c.id, 1)} title="往後移" aria-label={`把「${c.name}」往後移`}>▼</button>
+              <button className="btn btn-sm btn-ghost" disabled={cnt(c.id) > 0} onClick={() => S.delTab(c.id)} title={cnt(c.id) ? '裡面還有資料，要先移走或刪除才能刪分頁' : '刪除這個分頁'} aria-label={`刪除「${c.name}」`}>×</button>
+            </>
+          )}
+        </div>
+      ))}
+      <form onSubmit={(e) => { e.preventDefault(); add(); }} style={{ display: 'flex', gap: 6, paddingTop: 8, borderTop: `1px solid ${V.line}` }}>
+        <input className="field" value={nv} onChange={(e) => setNv(e.target.value)} maxLength={40} placeholder="新客戶名稱" style={{ flex: 1 }} />
+        <button type="submit" className="btn btn-primary" disabled={!nv.trim()}>＋ 新增分頁</button>
+      </form>
     </div>
   );
 }
@@ -82,4 +89,4 @@ const CUST_ENG_COLS = new Set([1, 2, 3, 4, 5, 6, 9]);
 const CUST_PLAN_COLS = new Set([0, 1, 2, 4, 5, 6]);
 const visCols = (S, cols, set) => (S.isCust ? cols.filter((_, i) => set.has(i)) : cols);
 
-export { NO_TAB, scopeStore, tabName, TabMove, tabBtn, TabBar, CUST_ENG_COLS, CUST_PLAN_COLS, visCols };
+export { NO_TAB, scopeStore, tabName, TabMove, tabBtn, TabBar, TabAdmin, CUST_ENG_COLS, CUST_PLAN_COLS, visCols };

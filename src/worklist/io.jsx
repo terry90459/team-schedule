@@ -136,7 +136,7 @@ function ImportModal({ S, onClose }) {
             <div style={{ display: 'flex', gap: 6, marginLeft: 8 }}>
               {Object.entries(IMPORT).filter(([k]) => kinds.includes(k)).map(([k, c]) => <button key={k} onClick={() => setKind(k)} style={{ ...FSEL, ...(kind === k ? FON : null) }}>匯入到{c.label}</button>)}
             </div>
-            <button onClick={onClose} style={{ marginLeft: 'auto', border: 'none', background: 'transparent', fontSize: 18, cursor: 'pointer', color: V.muted }}>×</button>
+            <button onClick={onClose} title="關閉" aria-label="關閉" style={{ marginLeft: 'auto', border: 'none', background: 'transparent', fontSize: 18, cursor: 'pointer', color: V.muted }}>×</button>
           </div>
           <div style={{ fontSize: 12, color: V.muted, lineHeight: 1.6 }}>
             在 Excel 選取多列（建議連標題列一起）複製後貼到下面。有標題列會依欄名對應（{cfg.fields.map((f) => f[1]).join('、')}，中英文欄名都可）；

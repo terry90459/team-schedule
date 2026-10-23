@@ -25,32 +25,34 @@ function MemberRow({ m, S, roA, onRemove, other }) {
       ) : (
         <>
           {m.team !== 'planner' && <span style={{ fontFamily: MONO, fontSize: 11, color: V.faint }}>{cnt} 件</span>}
-          {!roA && <button className="mv" onClick={() => { setV(m.name); setEdit(true); }} title="改名（Owner、紀錄人、更新者會一起改）" style={{ ...mvBtn, width: 22, fontSize: 12 }}>✎</button>}
-          {!roA && !m.profileId && <button className="mv" onClick={() => S.setMemberTeam(m.id, other)} title={other === 'planner' ? '移到 Planner 成員（生產排程頁）' : '移到工程師成員（工程清單頁）'} style={{ ...mvBtn, width: 22, fontSize: 12 }}>⇅</button>}
-          {!roA && <button disabled={!!m.profileId} onClick={() => onRemove(m.name)} title={m.profileId ? '已連結帳號的成員，請到「帳號管理」停用' : '移除'} style={{ border: 'none', background: 'transparent', cursor: m.profileId ? 'not-allowed' : 'pointer', color: V.faint, fontSize: 14, opacity: m.profileId ? 0.35 : 1 }}>×</button>}
+          {!roA && <button className="mv" onClick={() => { setV(m.name); setEdit(true); }} title="改名（Owner、紀錄人、更新者會一起改）" aria-label="改名（Owner、紀錄人、更新者會一起改）" style={{ ...mvBtn, width: 22, fontSize: 12 }}>✎</button>}
+          {!roA && !m.profileId && <button className="mv" onClick={() => S.setMemberTeam(m.id, other)} title={other === 'planner' ? '移到 Planner 組' : '移到工程師組'} aria-label={other === 'planner' ? '移到 Planner 組' : '移到工程師組'} style={{ ...mvBtn, width: 22, fontSize: 12 }}>⇅</button>}
+          {!roA && <button disabled={!!m.profileId} onClick={() => onRemove(m.name)} title={m.profileId ? '已連結帳號的成員，請到「帳號」停用' : '移除'} aria-label={m.profileId ? '已連結帳號的成員，請到「帳號」停用' : '移除'} style={{ border: 'none', background: 'transparent', cursor: m.profileId ? 'not-allowed' : 'pointer', color: V.faint, fontSize: 14, opacity: m.profileId ? 0.35 : 1 }}>×</button>}
         </>
       )}
     </div>
   );
 }
-// team：這個頁面只管哪一組（工程清單頁 → engineer，生產排程頁 → planner）
-function MemberPanel({ S, roA, onRemove, onClose, team }) {
+// team：工程師（engineer）或 Planner（planner）；inline＝直接放在頁面裡（⚙ 管理），否則是彈出面板
+function MemberPanel({ S, roA, onRemove, onClose, team, inline }) {
   const [name, setName] = useState('');
   const other = team === 'planner' ? 'engineer' : 'planner';
   const add = () => { const n = name.trim(); if (!n) return; const dup = S.members.find((m) => m.name.toLowerCase() === n.toLowerCase()); if (dup) { S.say(`「${n}」已經在${TEAM_LABEL[dup.team]}組裡`); return; } S.addOwner(n, team); setName(''); };
   const list = S.members.filter((m) => (m.team || 'engineer') === team);
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />
-      <div style={{ position: 'absolute', top: 38, right: 0, width: 360, background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.15)', zIndex: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {!inline && <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 9 }} />}
+      <div style={inline
+        ? { background: V.surface, border: `1px solid ${V.line}`, borderRadius: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }
+        : { position: 'absolute', top: 38, right: 0, width: 360, background: V.surface, border: `1px solid ${V.line2}`, borderRadius: 10, boxShadow: '0 12px 32px rgba(0,0,0,0.15)', zIndex: 10, padding: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ fontSize: 13, fontWeight: 500 }}>{team === 'planner' ? 'Planner 成員' : '工程師成員'}</div>
         <div style={{ fontSize: 11.5, color: V.muted2, lineHeight: 1.6 }}>
           {team === 'planner'
-            ? '帳號在「帳號管理」核准為 Planner 後會自動加入這裡（標示 ● 帳號）。'
-            : '帳號在「帳號管理」核准為工程師或管理員後會自動加入這裡（標示 ● 帳號），工程清單的 Owner 就是這份名單。'}
+            ? '帳號在「帳號」核准為 Planner 後會自動加入這裡（標示 ● 帳號）。'
+            : '帳號在「帳號」核准為工程師或管理員後會自動加入這裡（標示 ● 帳號），工程清單的 Owner 就是這份名單。'}
           {roA && <><br />只有管理員可以新增、改名或移除成員。</>}
         </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 320, overflow: 'auto' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: inline ? 'none' : 320, overflow: 'auto' }}>
           {list.length === 0 && <div style={{ fontSize: 12, color: V.faint, padding: '4px 8px' }}>（還沒有成員）</div>}
           {list.map((m) => <MemberRow key={m.id} m={m} S={S} roA={roA} onRemove={onRemove} other={other} />)}
         </div>

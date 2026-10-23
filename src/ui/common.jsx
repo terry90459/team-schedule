@@ -78,7 +78,7 @@ function RowDelete({ onDelete, disabled }) {
         <button onClick={() => { onDelete(); setAsk(false); }} title="再按一次確認刪除"
           style={{ height: 26, padding: '0 7px', border: 'none', borderRadius: 5, cursor: 'pointer', fontSize: 11, background: 'oklch(0.55 0.17 25)', color: '#fff' }}>確認</button>
       ) : (
-        <button className="del" disabled={disabled} onClick={() => setAsk(true)} title="刪除此列"
+        <button className="del" disabled={disabled} onClick={() => setAsk(true)} title="刪除此列" aria-label="刪除此列"
           style={{ width: 26, height: 26, border: 'none', background: 'transparent', borderRadius: 5, cursor: disabled ? 'default' : 'pointer', color: V.faint, fontSize: 15 }}>×</button>
       )}
     </div>

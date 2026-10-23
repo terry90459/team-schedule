@@ -1,15 +1,13 @@
 import React, { useState } from 'react';
-import { MONO, V } from '../lib/theme';
+import { V } from '../lib/theme';
 import { byName } from '../lib/util';
-import { HintBar, darkBtn, gridOf, lineBtn, useCols } from '../ui/common';
-import { MemberPanel } from '../worklist/members';
-import { CUST_PLAN_COLS, tabBtn, visCols } from '../ui/tabs';
-import { PGMIN, PGRID, PHEADS, PlanRow } from './PlanRow';
+import { HintBar, gridOf, useCols } from '../ui/common';
+import { CUST_PLAN_COLS, visCols } from '../ui/tabs';
+import { PGMIN, PGRID, PHEADS, PlanRow, planTemplate } from './PlanRow';
 import { PlanTimeline } from './timeline';
 
 /* 機台生產排程頁 */
-function PlanPage({ S }) {
-  const [showPM, setShowPM] = useState(false);
+function PlanPage({ S, goTimeline }) {
   const ro = !S.canPlan, cu = S.isCust;
   const [mode, setMode] = useState('list');
   const [mf, setMf] = useState('');
@@ -22,45 +20,48 @@ function PlanPage({ S }) {
   sorted.forEach((a) => sorted.forEach((b) => { if (a.id !== b.id && a.machine && a.machine === b.machine && a.start && a.end && b.start && b.end && a.start <= b.end && b.start <= a.end) clashIds.add(a.id); }));
   const ql = q.trim().toLowerCase();
   const list = sorted.filter((p) => (!mf || p.machine === mf) && (!hwOnly || p.hw) && (!ql || [p.machine, p.group, p.product, p.remark].some((x) => (x || '').toLowerCase().includes(ql))));
-  const [pcols, startPResize, resetPCol] = useCols('plan.cols.v1', PGRID, PGMIN);
+  const [pcols, startPResize, resetPCol] = useCols('plan.cols.v2', PGRID, PGMIN);
+  const pidx = PHEADS.map((_, i) => i).filter((i) => !cu || CUST_PLAN_COLS.has(i));
+  const ptpl = planTemplate(pidx, pcols);
   const vp = visCols(S, pcols, CUST_PLAN_COLS);
   const total = vp.reduce((a, b) => a + b, 0) + 2;
-  const tabBtn = (k, label) => <button key={k} onClick={() => setMode(k)} style={{ ...lineBtn, background: mode === k ? V.btnBg : V.surface, color: mode === k ? V.btnFg : V.ink, borderColor: mode === k ? V.btnBg : V.line2 }}>{label}</button>;
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '14px 24px', borderBottom: `1px solid ${V.line}`, flex: 'none' }}>
-        <span style={{ fontFamily: MONO, fontSize: 12, color: V.muted2 }}>{list.length} / {S.plans.length} 筆</span>
+      {/* P3：工具列一排；Planner 成員移到「⚙ 管理 → 成員」；時程圖統一在「時程圖」頁（客戶帳號仍在這裡切換） */}
+      <div className="toolbar flat">
+        <input className="field search" type="search" aria-label="搜尋" value={q} onChange={(e) => setQ(e.target.value)} placeholder={cu ? '搜尋機台、group、產品…' : '搜尋機台、group、產品、備註…'} style={{ width: 230 }} />
+        <select className="field" aria-label="機台" value={mf} onChange={(e) => setMf(e.target.value)} style={mf ? { borderColor: V.btnBg } : null}>
+          <option value="">全部機台</option>
+          {used.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        {!cu && <button className={'chip' + (hwOnly ? ' on' : '')} aria-pressed={hwOnly} onClick={() => setHwOnly((v) => !v)} style={hwOnly ? { background: 'oklch(0.62 0.15 50)', borderColor: 'oklch(0.62 0.15 50)', color: '#fff' } : null}>只看需 HW 協助<span className="n">{S.plans.filter((p) => p.hw).length}</span></button>}
         {!cu && clashIds.size > 0 && <span style={{ fontSize: 12, color: 'oklch(0.55 0.13 50)' }}>⚠ {clashIds.size} 筆排程日期重疊</span>}
-        <div style={{ display: 'flex', gap: 6, marginLeft: 8 }}>{tabBtn('list', '列表')}{tabBtn('time', '時程圖')}</div>
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10 }}>
-          {!cu && <div style={{ position: 'relative' }}>
-            <button className="member-btn" onClick={() => setShowPM((v) => !v)} style={lineBtn}>Planner 成員（{S.planners.length}）</button>
-            {showPM && <MemberPanel S={S} roA={!S.canAdmin} team="planner" onRemove={(n) => S.delOwnerOnly(n)} onClose={() => setShowPM(false)} />}
-          </div>}
-          {!cu && <button onClick={() => setHwOnly((v) => !v)} style={{ ...lineBtn, background: hwOnly ? 'oklch(0.62 0.15 50)' : V.surface, color: hwOnly ? '#fff' : V.ink, borderColor: hwOnly ? 'oklch(0.62 0.15 50)' : V.line2 }}>只看 HW 相關（{S.plans.filter((p) => p.hw).length}）</button>}
-          <select value={mf} onChange={(e) => setMf(e.target.value)} style={{ height: 32, border: `1px solid ${V.line2}`, borderRadius: 7, padding: '0 8px', fontSize: 13, background: V.surface }}>
-            <option value="">全部機台</option>
-            {used.map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={cu ? '搜尋 機台 / group / 產品' : '搜尋 機台 / group / 產品 / 備註'} style={{ height: 32, width: 240, border: `1px solid ${V.line2}`, borderRadius: 7, padding: '0 10px', fontSize: 13, background: V.surface }} />
-          {!cu && <button className="btn-dark" disabled={ro} onClick={() => S.addPlan(mf)} style={{ ...darkBtn, opacity: ro ? 0.5 : 1 }}>＋ 新增排程</button>}
-        </div>
+        <span className="grow" />
+        {cu
+          ? <div className="seg" role="group" aria-label="顯示方式">{[['list', '列表'], ['time', '時程圖']].map(([k, l]) => <button key={k} className={mode === k ? 'on' : ''} aria-pressed={mode === k} onClick={() => setMode(k)}>{l}</button>)}</div>
+          : <button className="btn btn-sm" onClick={() => goTimeline('plan')} title="到「時程圖」看生產排程">📅 時程圖</button>}
+        {!cu && <button className="btn btn-primary" disabled={ro} onClick={() => S.addPlan(mf)}>＋ 新增排程</button>}
       </div>
-      {!cu && S.machines.length === 0 && <HintBar>機台名稱來自「工程清單」頁的「機台清單」，請先在那裡建立機台。</HintBar>}
-      <div style={{ flex: 1, overflow: 'auto', padding: '18px 24px 40px' }}>
+      {!cu && S.machines.length === 0 && <HintBar>還沒有機台。{S.canAdmin ? '請到「⚙ 管理 → 機台」新增。' : '請管理員到「⚙ 管理 → 機台」新增。'}</HintBar>}
+      <div style={{ flex: 1, overflow: 'auto', padding: '12px 24px 40px' }}>
         {mode === 'time' ? <PlanTimeline plans={list} machineNames={used} /> : (
-          <div style={{ width: total, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ display: 'grid', gridTemplateColumns: gridOf(vp), position: 'sticky', top: 0, zIndex: 6, background: V.head, border: `1px solid ${V.line3}`, borderRadius: 8, boxShadow: `0 -18px 0 ${V.bg}` }}>
+          <div style={{ minWidth: total, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div className="tbl">
+            <div className="tbl-head" style={{ gridTemplateColumns: ptpl }}>
               {PHEADS.map(([en, zh], i) => cu && !CUST_PLAN_COLS.has(i) ? null : (
-                <div key={i} style={{ position: 'relative', padding: '8px 10px', fontSize: 12, fontWeight: 500, color: V.ink2, display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap', overflow: 'hidden' }}>
-                  <span>{en}</span><span style={{ fontSize: 10, color: V.faint }}>{zh}</span>
+                <div key={i}>
+                  <span>{zh || en}</span>
                   {i < PHEADS.length - 1 && <div className="colgrip" title="左右拖曳調整寬度（連點兩下還原）" onPointerDown={(e) => startPResize(i, e)} onDoubleClick={() => resetPCol(i)} />}
                 </div>
               ))}
             </div>
-            {list.map((p) => <PlanRow key={p.id} p={p} S={S} ro={ro} clash={clashIds.has(p.id)} machineOpts={machineOpts} cols={pcols} />)}
-            {list.length === 0 && <div style={{ padding: 40, textAlign: 'center', fontSize: 13, color: V.muted2, background: V.surface, border: `1px dashed ${V.line3}`, borderRadius: 10 }}>{S.plans.length === 0 ? (cu ? '目前沒有資料。' : '還沒有任何排程，按「＋ 新增排程」開始。') : '沒有符合條件的資料'}</div>}
-            {!ro && <div className="add-row" onClick={() => S.addPlan(mf)} style={{ padding: '10px 14px', fontSize: 13, color: V.muted2, cursor: 'pointer', borderRadius: 8, border: `1px dashed ${V.line3}`, textAlign: 'center' }}>＋ 新增排程</div>}
+            {list.map((p) => <PlanRow key={p.id} p={p} S={S} ro={ro} clash={clashIds.has(p.id)} machineOpts={machineOpts} cols={pcols} tpl={ptpl} />)}
+            {list.length === 0 && <div style={{ padding: 40, textAlign: 'center', fontSize: 13, color: V.muted2 }}>{S.plans.length === 0 ? (cu ? '目前沒有資料。' : '還沒有任何排程，按「＋ 新增排程」開始。') : '沒有符合條件的資料'}</div>}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {!ro && <button className="btn btn-sm btn-ghost" onClick={() => S.addPlan(mf)}>＋ 新增排程</button>}
+              <span className="mono muted" style={{ marginLeft: 'auto', fontSize: 11.5 }}>顯示 {list.length} / {S.plans.length} 筆</span>
+            </div>
           </div>
         )}
       </div>

@@ -19,7 +19,7 @@ function SettingsMenu({ S }) {
   );
   return (
     <div style={{ position: 'relative' }}>
-      <button onClick={() => setOpen((o) => !o)} title="設定" style={{ ...FSEL, height: 28 }}>⚙ 設定</button>
+      <button className="icon-btn" onClick={() => setOpen((o) => !o)} title="設定（天數算法、深淺色）" aria-label="設定" aria-haspopup="dialog" aria-expanded={open}>⚙</button>
       {open && (
         <>
           <div onClick={() => setOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 29 }} />

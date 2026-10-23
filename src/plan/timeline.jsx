@@ -2,11 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { MONO, UN, V, WD } from '../lib/theme';
 import { addD, byName, diff, dstr, holName, hue, isOff, s2d, validPlan, ymd } from '../lib/util';
 import { RangeBar, barTone, clip, useRange } from '../data/derive';
-import { lineBtn } from '../ui/common';
 import { engPlanClash } from '../worklist/parts';
 
 /* ============================================================
-   每日一格時程圖（生產排程、複合排程共用）
+   每日一格時程圖（生產排程、時程圖頁共用）
    ============================================================ */
 // 甘特圖：左欄寬度、每天最小寬度；實際每天寬度依畫面撐滿
 const GANTT_LW = 320, MIN_DW = 44;
@@ -120,8 +119,8 @@ function PlanTimeline({ plans, machineNames }) {
   return <DailyGrid groups={groups} headLabel="機台 / 測試產品" rangeKey="plan" />;
 }
 
-function ComboPage({ S, D }) {
-  const [mode, setMode] = useState('both');
+// 生產排程／工程＋生產（依機台）；mode 由「時程圖」頁決定
+function ComboPage({ S, D, mode }) {
   const [mf, setMf] = useState('');
   const [hwOnly, setHwOnly] = useState(false);
   const showE = mode !== 'plan', showP = mode !== 'eng';
@@ -140,16 +139,14 @@ function ComboPage({ S, D }) {
     return { key: m || 'none', label: m || NONE, rows };
   }).filter((g) => g.rows.length);
   const noDateE = D.rows.filter((r) => !r.dueD).length, noDateP = S.plans.length - plans.length;
-  const btn = (k, label) => <button key={k} onClick={() => setMode(k)} style={{ ...lineBtn, background: mode === k ? V.btnBg : V.surface, color: mode === k ? V.btnFg : V.ink, borderColor: mode === k ? V.btnBg : V.line2 }}>{label}</button>;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <div style={{ display: 'flex', gap: 6 }}>{btn('eng', '工程排程')}{btn('plan', '生產排程')}{btn('both', '工程排程＋生產排程')}</div>
-        <button onClick={() => setHwOnly((v) => !v)} style={{ ...lineBtn, background: hwOnly ? 'oklch(0.62 0.15 50)' : V.surface, color: hwOnly ? '#fff' : V.ink, borderColor: hwOnly ? 'oklch(0.62 0.15 50)' : V.line2 }}>生產排程只看 HW 相關</button>
-        <select value={mf} onChange={(e) => setMf(e.target.value)} style={{ height: 32, border: `1px solid ${V.line2}`, borderRadius: 7, padding: '0 8px', fontSize: 13, background: V.surface }}>
+        <select className="field" aria-label="機台" value={mf} onChange={(e) => setMf(e.target.value)}>
           <option value="">全部機台</option>
           {mset.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
+        <button className="btn" aria-pressed={hwOnly} onClick={() => setHwOnly((v) => !v)} style={hwOnly ? { background: 'oklch(0.62 0.15 50)', borderColor: 'oklch(0.62 0.15 50)', color: '#fff' } : null}>只看需 HW 協助的生產排程</button>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 14, fontSize: 12, color: V.muted, alignItems: 'center' }}>
           {showE && <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 14, height: 8, borderRadius: 2, background: 'oklch(0.82 0.14 90)' }} />工程（顏色＝狀態，橘＝3 天內到期，紅＝逾期）</span>}
           {showP && <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><span style={{ width: 14, height: 8, borderRadius: 2, background: 'oklch(0.7 0.13 150)' }} />生產（顏色＝產品 Group）</span>}
@@ -161,4 +158,24 @@ function ComboPage({ S, D }) {
   );
 }
 
-export { GANTT_LW, MIN_DW, useBoxW, fitDW, DIM, useFocus, FOCUS_BAR, focusHint, DailyGrid, planBar, planRowOf, PlanTimeline, ComboPage };
+export { GANTT_LW, MIN_DW, useBoxW, fitDW, DIM, useFocus, FOCUS_BAR, focusHint, DailyGrid, planBar, planRowOf, PlanTimeline, ComboPage, TL_MODES, TimelinePage };
+
+/* ============================================================
+   P7：時程圖（原本「工程清單 → 工程排程」「複合排程」「生產排程 → 時程圖」合併成一頁）
+   ============================================================ */
+const TL_MODES = [['eng', '工程排程'], ['plan', '生產排程'], ['both', '工程＋生產']];
+function TimelinePage({ S, D, mode, setMode, picked, setPicked, Gantt }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div className="seg" role="group" aria-label="時程圖內容">
+          {TL_MODES.map(([k, l]) => <button key={k} className={mode === k ? 'on' : ''} aria-pressed={mode === k} onClick={() => setMode(k)}>{l}</button>)}
+        </div>
+        <span className="muted" style={{ fontSize: 12 }}>{mode === 'eng' ? '工程清單的工作，依截止日與預計天數畫出' : mode === 'plan' ? '機台生產排程' : '同一台機台的工程工作與生產排程放在一起，方便看有沒有撞期'}</span>
+      </div>
+      {mode === 'eng'
+        ? (D.rows.length ? <Gantt D={D} picked={picked} setPicked={setPicked} /> : <div style={{ background: V.surface, border: `1px dashed ${V.line3}`, borderRadius: 10, padding: 48, textAlign: 'center', fontSize: 14, color: V.muted2 }}>工程清單中還沒有資料。</div>)
+        : <ComboPage S={S} D={D} mode={mode} />}
+    </div>
+  );
+}

@@ -62,11 +62,19 @@ const SORTS = [
   ['owner', '負責人'], ['days', '預計天數'], ['updated', '更新時間'],
 ];
 
-// 欄位：順序, Item, Owner, Customer, Machine, Status, Due, 時間軸, Priority, Remark, Log, File, Update, 刪除
-const COLW0 = [128, 320, 110, 140, 112, 104, 126, 112, 92, 240, 240, 160, 126, 36];
-const COLMIN = [128, 100, 70, 80, 70, 80, 110, 90, 80, 100, 140, 100, 100, 36];
-const COLS_KEY = 'worklist.cols.v3';
-const HEADS = [['順序', ''], ['Item', '工作項目'], ['Owner', '負責人'], ['Customer', '客戶 Owner'], ['Machine', '機台'], ['Status', '狀態'], ['Due date', '截止日'], ['時間軸', '預計天數'], ['Priority', '優先度'], ['Remark', '備註'], ['Log', '進度紀錄'], ['File', '附件'], ['Update', '更新時間'], ['', '']];
+// 欄位：順序, Item, Owner, Customer, Machine, Status, Due, 時間軸, Priority, Remark, Log, File, Update, ⋯（列選單）
+// Item 欄是「最小寬度＋撐滿剩餘空間」，其他欄固定寬度（可拖曳調整）
+const COLW0 = [64, 260, 110, 140, 112, 116, 126, 112, 98, 240, 220, 160, 126, 40];
+const COLMIN = [64, 160, 70, 80, 70, 80, 110, 90, 80, 100, 140, 100, 100, 40];
+const COLS_KEY = 'worklist.cols.v5';
+const HEADS = [['#', ''], ['Item', '工作項目'], ['Owner', '負責人'], ['Customer', '客戶 Owner'], ['Machine', '機台'], ['Status', '狀態'], ['Due date', '截止日'], ['時間軸', '預計天數'], ['Priority', '優先度'], ['Remark', '備註'], ['Log', '最新紀錄'], ['File', '附件'], ['Update', '更新時間'], ['', '']];
+// P1：預設只顯示常用的 8 欄（＋順序、列選單），其他欄位在「工作詳情」側欄，也可以從「欄位」選單勾回來
+const COL_FIXED = [0, 1, 13];
+const COL_DEFAULT = [0, 1, 2, 4, 5, 6, 8, 10, 13];
+const COL_LABEL = { 2: '負責人', 3: '客戶窗口', 4: '機台', 5: '狀態', 6: '截止日', 7: '預計天數', 8: '優先度', 9: '備註', 10: '最新紀錄', 11: '附件', 12: '更新時間' };
+const SHOW_KEY = 'worklist.show.v1';
+// 欄寬 → grid-template-columns（Item 欄撐滿）
+const colTemplate = (shown, cols) => shown.map((i) => (i === 1 ? `minmax(${cols[i]}px,1fr)` : `${cols[i]}px`)).join(' ');
 
 const FILE_OK = 'PDF、圖片（png/jpg/gif/webp/svg）、影片（mp4/webm）、字型，以及 csv / md / json / txt / log';
 function uploadMsg(name, err) {
@@ -104,7 +112,7 @@ function MachineDel({ engN, planN, onDel, disabled }) {
       <button onClick={() => { setAsk(false); onDel(); }} style={{ height: 22, padding: '0 6px', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 11, background: 'oklch(0.55 0.17 25)', color: '#fff' }}>確認移除</button>
     </span>
   );
-  return <button disabled={disabled} onClick={() => (used ? setAsk(true) : onDel())} title={used ? '從清單移除（已填的工作與排程仍保留此機台名稱）' : '移除'} style={{ border: 'none', background: 'transparent', cursor: disabled ? 'default' : 'pointer', color: V.faint, fontSize: 14 }}>×</button>;
+  return <button disabled={disabled} onClick={() => (used ? setAsk(true) : onDel())} title={used ? '從清單移除（已填的工作與排程仍保留此機台名稱）' : '移除'} aria-label={used ? '從清單移除（已填的工作與排程仍保留此機台名稱）' : '移除'} style={{ border: 'none', background: 'transparent', cursor: disabled ? 'default' : 'pointer', color: V.faint, fontSize: 14 }}>×</button>;
 }
 // C5：貼連結（docx / xlsx / 網路磁碟等不能上傳的檔案）
 function LinkAdd({ onAdd }) {
@@ -141,4 +149,4 @@ function LinkAdd({ onAdd }) {
   );
 }
 
-export { RemoveOwnerModal, SORTS, COLW0, COLMIN, COLS_KEY, HEADS, FILE_OK, uploadMsg, CLASH, engPlanClash, MachineDel, LinkAdd };
+export { RemoveOwnerModal, SORTS, COLW0, COLMIN, COLS_KEY, HEADS, COL_FIXED, COL_DEFAULT, COL_LABEL, SHOW_KEY, colTemplate, FILE_OK, uploadMsg, CLASH, engPlanClash, MachineDel, LinkAdd };

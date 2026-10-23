@@ -25,16 +25,22 @@ node dev-test/smoke.cjs                                 # 快速測試（要先�
 |---|---|
 | `lib/` | `config`（Supabase 連線）、`theme`（顏色、狀態常數）、`util`（日期、**台灣國定假日 TW_OFF/TW_WORK**、排序等小工具） |
 | `data/` | `backend`（Supabase／本機兩種後端，欄位對照 SB_COLS）、`store`（`useStore` 資料層，畫面只透過它存取資料）、`derive`（儀表板衍生資料、甘特圖區間） |
-| `ui/` | `common`（共用按鈕、輸入框、欄寬）、`tabs`（客戶分頁、客戶可見欄位 CUST_ENG_COLS/CUST_PLAN_COLS） |
-| `worklist/` | 工程清單頁、每一列（WorkCard）、進度紀錄抽屜、匯出 CSV／Excel 匯入、成員面板 |
-| `dashboard/` | 總覽、工程排程甘特圖、卡片看板 |
-| `plan/` | 生產排程頁、每一列、時程圖（DailyGrid，複合排程也用它） |
+| `ui/` | `common`（共用按鈕、輸入框、欄寬）、`menu`（下拉選單 Dropdown／MenuItem、ⓘ 說明 InfoToggle）、`tabs`（客戶分頁列、分頁管理 TabAdmin、客戶可見欄位 CUST_ENG_COLS/CUST_PLAN_COLS） |
+| `worklist/` | 工程清單頁、每一列（WorkCard，欄位見 `parts.jsx` 的 HEADS／COL_DEFAULT）、工作詳情抽屜（`logs.jsx`）、附件（`files.jsx`）、匯出 CSV／Excel 匯入、成員面板 |
+| `dashboard/` | 總覽、工程排程甘特圖（時程圖頁使用）、卡片看板 |
+| `plan/` | 生產排程頁、每一列、時程圖頁 TimelinePage（工程／生產／合併三種）與 DailyGrid |
 | `daily/` | 每日頁 |
-| `account/` | 登入／註冊、帳號管理頁（可見分頁、允許註冊名單、備份還原） |
+| `account/` | 登入／註冊、⚙ 管理頁 ManagePage（帳號／成員／機台／客戶分頁）、帳號列表（可見分頁、允許註冊名單、備份還原） |
 | `app/` | App 外框（分頁、客戶模式）、右上角設定、線上人數、資料庫版本提醒 |
 | `demo/` | 預覽版用的模擬 Supabase（`fakeSupabase.js`，要跟 schema 的權限規則保持一致）與假資料（`seed.js`） |
 
 依賴方向：`lib` → `data` → `ui` → 各頁面 → `app`。不要讓底層 import 上層。
+
+## 介面原則（2026-10 版面簡化後）
+- 給每天用的人：常用的放外面（搜尋、狀態、只看我的、新增），偶爾用的收進「篩選 ▾」「⋯ 更多」，只有管理員用的放「⚙ 管理」。
+- 工程清單預設只顯示 8 欄，其他欄位在「工作詳情」側欄；新增欄位時先想「是不是每天都要看」，不是就放側欄。
+- 新寫的介面用 `build.mjs` 裡的共用 class（`.btn` `.chip` `.seg` `.field` `.pop` `.mi` `.toolbar`…），不要再寫一大串 inline style；舊元件改到時順手換掉。
+- 1366px 寬（一般筆電）不能出現左右捲動；手機寬度至少要能切換頁面、不被裁切（smoke.cjs 有檢查）。
 
 ## 資料庫（supabase/schema.sql）
 - 可以重複執行、不刪資料。**改了 schema 要做三件事**：
