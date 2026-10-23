@@ -7,6 +7,7 @@ name: 更新 Supabase 資料庫
 # - 需要 GitHub Secret：SUPABASE_DB_URL（Supabase → Connect → Session pooler 的連線字串，含資料庫密碼）
 #   一定要放在 Secrets，不能放在 Variables（Variables 是公開的）
 # - 改了 Secret 後要重跑：Actions → 更新 Supabase 資料庫 → Run workflow
+#   連線字串範例：postgresql://postgres.專案代碼:密碼@aws-0-區域.pooler.supabase.com:5432/postgres（密碼外不要有方括號）
 on:
   push:
     branches: [main]
