@@ -4,11 +4,10 @@ name: 更新 Supabase 資料庫
 # （schema.sql 本來就可以重複執行、不刪資料）
 # - 整份在同一個交易裡跑：任何一行出錯就停下來、全部復原，不會留下改一半的資料庫
 # - 跑完檢查 schema_version() 是否等於檔案最後寫的版本號
-# - 需要 GitHub Secret（一定要放在 Secrets，不能放在 Variables；Variables 是公開的），二選一：
-#   1. SUPABASE_DB_PASSWORD（建議）：只放資料庫密碼本身，有符號也沒關係；主機、使用者寫在下面（不是機密）
-#   2. SUPABASE_DB_URL：Session pooler 的完整連線字串
-#      範例：postgresql://postgres.專案代碼:密碼@aws-0-區域.pooler.supabase.com:5432/postgres（密碼外不要有方括號）
-#   兩個都有時用 SUPABASE_DB_PASSWORD
+# - 需要 GitHub Secret（一定要放在 Secrets，不能放在 Variables；Variables 是公開的），有哪個用哪個，前面的失敗就換下一個：
+#   1. SUPABASE_ACCESS_TOKEN（最可靠）：Supabase 帳號的存取權杖（supabase.com/dashboard/account/tokens），走 HTTPS 管理 API
+#   2. SUPABASE_DB_PASSWORD：只放資料庫密碼本身；主機、使用者寫在下面（不是機密）
+#   3. SUPABASE_DB_URL：Session pooler 的完整連線字串（密碼外不要有方括號）
 # - 改了 Secret 後要重跑：Actions → 更新 Supabase 資料庫 → Run workflow
 on:
   push:
@@ -29,79 +28,96 @@ jobs:
     permissions:
       contents: read
     env:
-      DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      SB_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       DB_PASS: ${{ secrets.SUPABASE_DB_PASSWORD }}
-      # 只填密碼時用的連線資訊（Supabase → Connect → Session pooler；不是機密，可用 repo Variables 覆蓋）
+      DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+      # 專案代碼與 Session pooler 主機（不是機密；可用 repo Variables 覆蓋）
+      DB_REF: ${{ vars.SUPABASE_PROJECT_REF || 'groniyjxuhppicudlrjd' }}
       DB_HOST: ${{ vars.SUPABASE_DB_HOST || 'aws-0-ap-southeast-1.pooler.supabase.com' }}
-      DB_USER: ${{ vars.SUPABASE_DB_USER || 'postgres.groniyjxuhppicudlrjd' }}
       PGCONNECT_TIMEOUT: '20'
     steps:
       - uses: actions/checkout@v4
 
-      - name: 檢查設定
+      - name: 準備工具
         run: |
-          if [ -n "$DB_PASS" ]; then
-            # 只填密碼：用 libpq 的環境變數連線，密碼不經過網址，不用管符號編碼
-            {
-              echo "PGHOST=$DB_HOST"; echo "PGPORT=5432"; echo "PGUSER=$DB_USER"; echo "PGDATABASE=postgres"
-              echo "PGPASSWORD=$(printf '%s' "$DB_PASS" | tr -d '\r\n')"; echo "PGURL=dbname=postgres"; echo "MODE=pass"
-            } >> "$GITHUB_ENV"
-            echo "連線方式：SUPABASE_DB_PASSWORD（$DB_USER @ $DB_HOST）"
-          elif [ -n "$DB_URL" ]; then
-            { echo "PGURL=$DB_URL"; echo "MODE=url"; } >> "$GITHUB_ENV"
-            echo "連線方式：SUPABASE_DB_URL"
-          else
-            echo "::error::還沒設定 GitHub Secret。請到 repo → Settings → Secrets and variables → Actions → Secrets 新增「SUPABASE_DB_PASSWORD」（只放資料庫密碼）。"
-            exit 1
-          fi
           command -v psql >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client; }
-          psql --version
+          command -v jq >/dev/null || sudo apt-get install -y -qq jq
+          # 共用函式：sql "查詢" → 印出第一列第一欄；sql_file 檔案 → 整份在交易裡執行
+          cat > "$RUNNER_TEMP/db.sh" <<'SH'
+          api() {  # 管理 API 執行 SQL，回傳 JSON
+            local body resp code
+            body=$(jq -Rs '{query: .}' <<< "$1")
+            resp=$(curl -sS -w '\n%{http_code}' -X POST "https://api.supabase.com/v1/projects/$DB_REF/database/query" \
+              -H "Authorization: Bearer $SB_TOKEN" -H "Content-Type: application/json" --data-binary "$body") || return 1
+            code=$(tail -n1 <<< "$resp"); resp=$(sed '$d' <<< "$resp")
+            if [ "${code:0:1}" != 2 ]; then echo "HTTP $code $(jq -r '.message // .error // .' <<< "$resp" 2>/dev/null || echo "$resp")" >&2; return 1; fi
+            echo "$resp"
+          }
+          sql() {
+            if [ "$MODE" = api ]; then api "$1" | jq -r '.[0] // {} | to_entries[0].value // empty'
+            else psql "$PGURL" -v ON_ERROR_STOP=1 -tA -c "$1"; fi
+          }
+          sql_file() {
+            if [ "$MODE" = api ]; then api "$(printf 'begin;\n%s\ncommit;\n' "$(cat "$1")")" >/dev/null
+            else psql "$PGURL" -v ON_ERROR_STOP=1 --single-transaction -q -f "$1"; fi
+          }
+          SH
+          sed -i 's/^          //' "$RUNNER_TEMP/db.sh"
 
-      - name: 連線測試
+      - name: 選擇連線方式並測試
         run: |
-          # 用連線字串時，先檢查常見的填錯（訊息裡不會印出連線字串）
-          if [ "$MODE" = url ]; then
-            case "$PGURL" in
-              *'YOUR-PASSWORD'*) echo "::error::連線字串裡還是「[YOUR-PASSWORD]」，請換成資料庫密碼（不要保留方括號）。"; exit 1;;
-              *'@db.'*'.supabase.co'*) echo "::error::這是 Direct connection（只支援 IPv6，GitHub 連不到）。請改用 Session pooler 的連線字串，或改用 SUPABASE_DB_PASSWORD。"; exit 1;;
-              postgres://*|postgresql://*) ;;
-              *) echo "::error::連線字串要以 postgresql:// 開頭（請複製 URI 格式）。"; exit 1;;
-            esac
-            rest="${PGURL#*://}"; creds="${rest%@*}"; pass="${creds#*:}"
-            case "$pass" in
-              '['*|*']') echo "::error::密碼外面還有方括號 [ ]，請連方括號一起刪掉。建議改用 SUPABASE_DB_PASSWORD 只放密碼。"; exit 1;;
-              *'/'*|*'?'*|*'#'*|*'@'*|*' '*) echo "::error::密碼裡有 / ? # @ 或空白，會讓連線字串斷錯位置。建議改用 SUPABASE_DB_PASSWORD 只放密碼。"; exit 1;;
-            esac
+          . "$RUNNER_TEMP/db.sh"
+          tried=""
+          try() {  # $1 = 方式名稱；成功就寫進 GITHUB_ENV
+            local err
+            if err=$(sql "select 'ok'" 2>&1 >/dev/null); then
+              echo "✓ 連線成功：$1"; return 0
+            fi
+            err=$(printf '%s' "$err" | sed -E 's#postgres(ql)?://[^ "]*#<連線字串>#g' | tr '\n' ' ' | cut -c1-300)
+            echo "::warning::$1 連線失敗：$err"
+            tried="$tried $1"; return 1
+          }
+          if [ -n "$SB_TOKEN" ]; then
+            export MODE=api
+            if try "SUPABASE_ACCESS_TOKEN（管理 API）"; then echo "MODE=api" >> "$GITHUB_ENV"; exit 0; fi
           fi
-          # 連線失敗時把 psql 的錯誤顯示在摘要上（連線字串一律遮掉）
-          if ! err=$(psql "$PGURL" -v ON_ERROR_STOP=1 -tAc "select 'ok'" 2>&1 >/dev/null); then
-            msg=$(printf '%s' "$err" | sed -E 's#postgres(ql)?://[^ "]*#<連線字串>#g' | tr '\n' ' ' | cut -c1-400)
-            case "$err" in
-              *'password authentication failed'*) hint='密碼不對：請確認是「資料庫密碼」（不是 Supabase 登入密碼），可在 Database → Settings 重設；剛重設的密碼可能要等幾分鐘才生效。';;
-              *'Tenant or user not found'*) hint='使用者名稱或區域不對：請到 Supabase → Connect → Session pooler 確認主機與使用者，必要時在 repo Variables 設定 SUPABASE_DB_HOST／SUPABASE_DB_USER。';;
-              *'could not translate host name'*|*'Network is unreachable'*|*'timeout'*) hint='連不到主機：請確認用的是 Session pooler、專案沒有被暫停。';;
-              *) hint='請確認連線資訊與密碼正確。';;
-            esac
-            echo "::error::連不上資料庫：$msg"
-            echo "::error::$hint"
-            exit 1
+          if [ -n "$DB_PASS" ]; then
+            export MODE=pass PGHOST="$DB_HOST" PGPORT=5432 PGUSER="postgres.$DB_REF" PGDATABASE=postgres
+            export PGPASSWORD="$(printf '%s' "$DB_PASS" | tr -d '\r\n')" PGURL="dbname=postgres"
+            if try "SUPABASE_DB_PASSWORD"; then
+              { echo "MODE=pass"; echo "PGHOST=$PGHOST"; echo "PGPORT=5432"; echo "PGUSER=$PGUSER"; echo "PGDATABASE=postgres"; echo "PGPASSWORD=$PGPASSWORD"; echo "PGURL=dbname=postgres"; } >> "$GITHUB_ENV"
+              exit 0
+            fi
+            unset PGHOST PGPORT PGUSER PGDATABASE PGPASSWORD
           fi
-          echo "目前資料庫版本：$(psql "$PGURL" -tAc 'select public.schema_version()' 2>/dev/null || echo '（舊版，沒有版本函式）')"
+          if [ -n "$DB_URL" ]; then
+            export MODE=url PGURL="$DB_URL"
+            if try "SUPABASE_DB_URL"; then { echo "MODE=url"; echo "PGURL=$DB_URL"; } >> "$GITHUB_ENV"; exit 0; fi
+          fi
+          if [ -z "$tried" ]; then
+            echo "::error::還沒設定任何 Secret。建議到 supabase.com/dashboard/account/tokens 產生存取權杖，存成 GitHub Secret「SUPABASE_ACCESS_TOKEN」。"
+          else
+            echo "::error::所有連線方式都失敗（${tried# }）。最可靠的是 SUPABASE_ACCESS_TOKEN：supabase.com/dashboard/account/tokens → Generate new token。"
+          fi
+          exit 1
 
       - name: 執行 schema.sql（單一交易，出錯全部復原）
         run: |
-          if ! out=$(psql "$PGURL" -v ON_ERROR_STOP=1 --single-transaction -q -f supabase/schema.sql 2>&1); then
+          . "$RUNNER_TEMP/db.sh"
+          echo "連線方式：$MODE　執行前版本：$(sql 'select public.schema_version()' 2>/dev/null || echo '舊版')"
+          if ! out=$(sql_file supabase/schema.sql 2>&1); then
             echo "$out"
-            echo "::error::schema.sql 執行失敗，資料庫已全部復原（沒有任何改動）：$(printf '%s' "$out" | grep -E 'ERROR|錯誤' | head -3 | tr '\n' ' ' | cut -c1-500)"
+            echo "::error::schema.sql 執行失敗，資料庫已全部復原（沒有任何改動）：$(printf '%s' "$out" | grep -iE 'error|錯誤|HTTP' | head -3 | tr '\n' ' ' | cut -c1-500)"
             exit 1
           fi
 
       - name: 確認版本號
         run: |
+          . "$RUNNER_TEMP/db.sh"
           want=$(grep -oE 'select [0-9]+ \$\$;' supabase/schema.sql | tail -1 | grep -oE '[0-9]+')
-          got=$(psql "$PGURL" -tAc 'select public.schema_version()')
+          got=$(sql 'select public.schema_version()')
           echo "檔案版本：$want　資料庫版本：$got"
           if [ "$want" != "$got" ]; then echo "::error::版本號不一致（檔案 $want，資料庫 $got）"; exit 1; fi
           # 請 Supabase API（PostgREST）重新讀取資料表結構，新的檢視表／函式馬上可以用
-          psql "$PGURL" -q -c "notify pgrst, 'reload schema'"
-          echo "::notice::資料庫已更新到 v$got"
+          sql "notify pgrst, 'reload schema'" >/dev/null || true
+          echo "::notice::資料庫已更新到 v$got（連線方式：$MODE）"
