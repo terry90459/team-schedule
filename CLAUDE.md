@@ -50,7 +50,7 @@ node dev-test/smoke.cjs                                 # 快速測試（要先�
 - 可以重複執行、不刪資料。**改了 schema 要做三件事**：
   1. 檔案最後 `schema_version()` 的數字加 1，並同步改 `src/data/backend.js` 的 `SCHEMA_VERSION`
   2. 同步更新 `src/demo/fakeSupabase.js`（預覽版的權限模擬）
-  3. 推到 main 後，GitHub Actions「更新 Supabase 資料庫」（`.github/workflows/db-update.yml`）會自動在 Supabase 執行整份 schema.sql（單一交易，出錯全部復原）；到 Actions 確認成功。需要 Secret `SUPABASE_DB_URL`（Session pooler 連線字串）。失敗時才請 Hank 手動貼到 SQL Editor
+  3. 推到 main 後，GitHub Actions「更新 Supabase 資料庫」（`.github/workflows/db-update.yml`）會自動在 Supabase 執行整份 schema.sql（單一交易，出錯全部復原）；到 Actions 確認成功。需要 Secret `SUPABASE_DB_PASSWORD`（只放資料庫密碼；或 `SUPABASE_DB_URL` 完整連線字串）。失敗時才請 Hank 手動貼到 SQL Editor
 - 權限一律在資料庫（RLS／檢視表／觸發器）把關，畫面隱藏只是輔助。
 - 角色：`viewer`／`engineer`／`planner`／`admin`／`customer`；`profiles.tabs` 是可見分頁（內部帳號 null＝全部；客戶＝綁定的分頁）。客戶帳號只能讀 `cust_items`／`cust_plans` 檢視表。
 - 更新時間、更新者由資料庫填（伺服器台灣時間），前端送的值會被覆蓋。
