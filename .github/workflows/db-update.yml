@@ -74,7 +74,7 @@ jobs:
               echo "✓ 連線成功：$1"; return 0
             fi
             err=$(printf '%s' "$err" | sed -E 's#postgres(ql)?://[^ "]*#<連線字串>#g' | tr '\n' ' ' | cut -c1-300)
-            echo "::warning::$1 連線失敗：$err"
+            if [ "${QUIET:-0}" = 1 ]; then echo "✗ $1：$err"; else echo "::warning::$1 連線失敗：$err"; fi
             tried="$tried $1"; return 1
           }
           if [ -n "$SB_TOKEN" ]; then
@@ -82,12 +82,24 @@ jobs:
             if try "SUPABASE_ACCESS_TOKEN（管理 API）"; then echo "MODE=api" >> "$GITHUB_ENV"; exit 0; fi
           fi
           if [ -n "$DB_PASS" ]; then
-            export MODE=pass PGHOST="$DB_HOST" PGPORT=5432 PGUSER="postgres.$DB_REF" PGDATABASE=postgres
-            export PGPASSWORD="$(printf '%s' "$DB_PASS" | tr -d '\r\n')" PGURL="dbname=postgres"
-            if try "SUPABASE_DB_PASSWORD"; then
-              { echo "MODE=pass"; echo "PGHOST=$PGHOST"; echo "PGPORT=5432"; echo "PGUSER=$PGUSER"; echo "PGDATABASE=postgres"; echo "PGPASSWORD=$PGPASSWORD"; echo "PGURL=dbname=postgres"; } >> "$GITHUB_ENV"
-              exit 0
-            fi
+            export MODE=pass PGUSER="postgres.$DB_REF" PGDATABASE=postgres PGURL="dbname=postgres"
+            export PGPASSWORD="$(printf '%s' "$DB_PASS" | tr -d '\r\n')"
+            echo "密碼長度：${#PGPASSWORD} 個字元（請對照你設定的密碼）"
+            # 依序試：設定的主機、aws-0／aws-1 兩個連線池；5432（session）與 6543（transaction）
+            # 剛重設的密碼連線池可能還沒換上，整輪失敗就等 30 秒再試，最多 6 輪（約 3 分鐘）
+            region="${DB_HOST#aws-*-}"; region="${region%%.pooler*}"
+            hosts=$(printf '%s\n' "$DB_HOST" "aws-0-$region.pooler.supabase.com" "aws-1-$region.pooler.supabase.com" | awk '!seen[$0]++')
+            for round in 1 2 3 4 5 6; do
+              QUIET=$([ "$round" -lt 6 ] && echo 1 || echo 0)
+              for h in $hosts; do for port in 5432 6543; do
+                export PGHOST="$h" PGPORT="$port"
+                if try "SUPABASE_DB_PASSWORD（$h:$port，第 $round 輪）"; then
+                  { echo "MODE=pass"; echo "PGHOST=$PGHOST"; echo "PGPORT=$PGPORT"; echo "PGUSER=$PGUSER"; echo "PGDATABASE=postgres"; echo "PGPASSWORD=$PGPASSWORD"; echo "PGURL=dbname=postgres"; } >> "$GITHUB_ENV"
+                  exit 0
+                fi
+              done; done
+              [ "$round" -lt 6 ] && { echo "第 $round 輪全部失敗，30 秒後再試…"; sleep 30; }
+            done
             unset PGHOST PGPORT PGUSER PGDATABASE PGPASSWORD
           fi
           if [ -n "$DB_URL" ]; then
